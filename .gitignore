@@ -1,0 +1,7 @@
+*.exe
+*.dll
+*.so
+*.obj
+*.o
+*.un~
+*_test
