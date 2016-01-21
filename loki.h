@@ -1402,21 +1402,23 @@ LK_API char *lk_getconfig (lk_State *S, const char *key) {
 
 LK_API void lk_setconfig (lk_State *S, const char *key, const char *value) {
     lk_Entry *e;
-    lk_Buffer B;
-    size_t keysize = strlen(key);
-    const char *newkey, *newvalue;
-    lk_initbuffer(S, &B);
-    lk_addlstring(&B, key, keysize);
-    lk_addchar(&B, '\0');
-    lk_addstring(&B, value);
-    lk_addchar(&B, '\0');
-    newkey = lk_buffresult(&B);
-    newvalue = newkey + keysize + 1;
+    size_t valuesize = strlen(value);
     lk_lock(S->lock);
     e = lk_setentry(&S->config, key);
-    if (e->value) lk_free(S, (void*)e->key);
-    e->key = newkey;
-    e->value = (void*)newvalue;
+    if (e->value && strlen(e->value) >= valuesize)
+        memcpy(e->value, value, valuesize+1);
+    else {
+        size_t keysize = strlen(key);
+        lk_Buffer B;
+        lk_initbuffer(S, &B);
+        lk_addlstring(&B, key, keysize);
+        lk_addchar(&B, '\0');
+        lk_addlstring(&B, value, valuesize);
+        lk_addchar(&B, '\0');
+        lk_free(S, (void*)e->key);
+        e->key = lk_buffresult(&B);
+        e->value = (void*)&e->key[keysize + 1];
+    }
     lk_unlock(S->lock);
 }
 
