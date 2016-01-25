@@ -560,7 +560,7 @@ LK_API char *lk_prepbuffsize (lk_Buffer *B, size_t len) {
             newptr = lk_malloc(B->S, newsize);
             memcpy(newptr, B->buff, B->size);
         }
-        B->buff = newptr;
+        B->buff = (char*)newptr;
         B->capacity = newsize;
     }
     return &B->buff[B->size];
@@ -573,7 +573,7 @@ LK_API int lk_addlstring (lk_Buffer *B, const char *s, size_t len) {
 
 LK_API int lk_addvfstring (lk_Buffer *B, const char *fmt, va_list l) {
     const size_t init_size = 80;
-    void *ptr = lk_prepbuffsize(B, init_size+1);
+    char *ptr = lk_prepbuffsize(B, init_size+1);
     size_t len;
     va_list l_count;
 #ifdef va_copy
@@ -611,9 +611,6 @@ LK_API const char *lk_buffresult (lk_Buffer *B) {
 
 
 /* hashtable routines */
-
-LK_API void lk_delentry (lk_Table *t, lk_Entry *e)
-{ lk_free(t->S, (void*)e->key); e->hash = 0; e->key = e->value = NULL; }
 
 static size_t lkH_hashsize (size_t len) {
     size_t newsize = LK_MIN_HASHSIZE;
@@ -742,6 +739,13 @@ LK_API lk_Entry *lk_setentry (lk_Table *t, const char *key) {
     e.hash = lkH_calchash(key, strlen(key));
     e.value = 0;
     return lkH_newkey(t, &e);
+}
+
+LK_API void lk_delentry (lk_Table *t, lk_Entry *e) {
+    lk_free(t->S, (void*)e->key);
+    e->hash = 0;
+    e->key = NULL;
+    e->value = NULL;
 }
 
 LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry) {
@@ -1036,7 +1040,7 @@ LK_API lk_Slot *lk_slot (lk_State *S, const char *name) {
     lk_Slot  *slot = NULL;
     lk_lock(S->lock);
     e = lk_getentry(&S->slots, name);
-    if (e != NULL) slot = e->value;
+    if (e != NULL) slot = (lk_Slot*)e->value;
     lk_unlock(S->lock);
     return slot;
 }
@@ -1114,8 +1118,9 @@ static int lkS_emitslotL (lk_State *S, lk_Service *svr, lk_SignalNode *node) {
 LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     lk_Service *svr = slot->service;
     lk_State *S = slot->S;
-    lk_SignalNode *node = NULL, tmp = { NULL };
+    lk_SignalNode *node = NULL, tmp;
     int ret = LK_ERR;
+    memset(&tmp, 0, sizeof(tmp));
     tmp.slot = slot;
     tmp.data = *sig;
     if (tmp.data.src == NULL) tmp.data.src = lk_self(S);
@@ -1124,7 +1129,7 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     if (S->status != LK_STOPPING) {
         lkQ_dequeue(&S->freed_signals, node);
         if (node == NULL)
-            node = lk_malloc(S, sizeof(lk_SignalNode));
+            node = (lk_SignalNode*)lk_malloc(S, sizeof(lk_SignalNode));
         *node = tmp;
         if (sig->copy) {
             node->data.data = lk_malloc(S, sig->size);
@@ -1263,7 +1268,8 @@ static void lkT_freeslotsL (lk_State *S, lk_Service *svr) {
             lk_delentry(&S->slots, e);
         else {
             e->hash = 0;
-            e->key = e->value = NULL;
+            e->key = NULL;
+            e->value = NULL;
         }
         svr->slots = next;
     }
@@ -1570,7 +1576,7 @@ LK_API int lk_pcall (lk_State *S, lk_Handler *h, void *ud) {
     int ret = LK_OK;
     lk_Context ctx;
     lk_pushcontext(S, &ctx, NULL);
-    lk_try(S, &ctx, ret = h(ud, S));
+    lk_try(S, &ctx, ret = h(S, ud));
     lk_popcontext(S, &ctx);
     return ctx.status == LK_ERR ? LK_ERR : ret;
 }
@@ -1606,7 +1612,7 @@ LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud) {
     lk_lock(S->lock);
     lkQ_dequeue(&S->freed_cleanups, cleanup);
     if (cleanup == NULL)
-        cleanup = lk_malloc(S, sizeof(lk_Cleanup));
+        cleanup = (lk_Cleanup*)lk_malloc(S, sizeof(lk_Cleanup));
     lk_unlock(S->lock);
     cleanup->h = h;
     cleanup->ud = ud;
@@ -1620,7 +1626,7 @@ LK_API char *lk_getconfig (lk_State *S, const char *key) {
     char *value = NULL;
     lk_lock(S->lock);
     e = lk_getentry(&S->config, key);
-    if (e) value = lk_strdup(S, e->value);
+    if (e) value = lk_strdup(S, (char*)e->value);
     lk_unlock(S->lock);
     return value;
 }
@@ -1630,7 +1636,7 @@ LK_API void lk_setconfig (lk_State *S, const char *key, const char *value) {
     size_t valuesize = strlen(value);
     lk_lock(S->lock);
     e = lk_setentry(&S->config, key);
-    if (e->value && strlen(e->value) >= valuesize)
+    if (e->value && strlen((char*)e->value) >= valuesize)
         memcpy(e->value, value, valuesize+1);
     else {
         size_t keysize = strlen(key);

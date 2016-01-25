@@ -2,28 +2,28 @@
 #include "loki_services.h"
 
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_Signal new;
+    lk_Signal ret;
     printf("msg: %s\n", (char*)sig->data);
-    new = *sig;
+    ret = *sig;
     sig->copy = 0;
-    lk_emit((lk_Slot*)sig->src, &new);
+    lk_emit((lk_Slot*)sig->src, &ret);
     return LK_OK;
 }
 
 static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed) {
     lk_Slot *echo = lk_slot(S, "echo.echo");
-    lk_Signal new = LK_SIGNAL;
+    lk_Signal ret = LK_SIGNAL;
     int *pi = (int*)ud;
-    new.copy = 1;
-    new.size = 13;
+    ret.copy = 1;
+    ret.size = 13;
     if ((*pi)++ == 10) {
         lk_free(S, pi);
         lk_close(S);
         return 0;
     }
     printf("timer: %d: %u\n", *pi, elapsed);
-    new.data = lk_strdup(S, "hello world!");
-    lk_emit(echo, &new);
+    ret.data = lk_strdup(S, "hello world!");
+    lk_emit(echo, &ret);
     return 1000;
 }
 
@@ -38,7 +38,7 @@ static int resp(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
 static int loki_service_echo(lk_State *S) {
     lk_Service *svr = lk_require(S, "timer");
     lk_Timer *t;
-    int *pi = lk_malloc(S, sizeof(int));
+    int *pi = (int*)lk_malloc(S, sizeof(int));
     *pi = 0;
     lk_newslot(S, "echo", echo, NULL);
     t = lk_newtimer(svr, repeater, (void*)pi);

@@ -33,13 +33,13 @@ LK_API lk_Time lk_time(void) {
     uint64_t now = mach_absolute_time();
     return (zn_Time)((now - start) * time_info.numer / time_info.denom / 1000000);
 #else
-    static lk_Time start = -1;
+    static lk_Time start = ~(lk_Time)0;
     struct timespec ts;
     lk_Time time;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
         return 1;
     time = (lk_Time)((lk_Time)ts.tv_sec*1000+ts.tv_nsec/1000000);
-    if (start == -1) {
+    if (start == ~(lk_Time)0) {
         start = time;
         return 0;
     }
