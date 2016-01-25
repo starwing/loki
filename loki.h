@@ -117,7 +117,7 @@ LK_API void  lk_setrefactor (lk_Service *svr, lk_SignalHandler *h, void *ud);
 
 /* message routines */
 
-#define LK_SIGNAL { NULL, NULL, NULL, 0, 0, 0, 0 }
+#define LK_SIGNAL { NULL, NULL, 0, 0, 0, 0 }
 
 LK_API lk_Slot *lk_slot (lk_State *S, const char *name);
 
@@ -143,6 +143,7 @@ LK_API void *lk_malloc  (lk_State *S, size_t size);
 LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
 LK_API void  lk_free    (lk_State *S, void *ptr);
 LK_API char *lk_strdup  (lk_State *S, const char *s);
+LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
 
 
 /* buffer routines */
@@ -191,7 +192,6 @@ LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry);
 struct lk_Signal {
     lk_Service *src;
     void *data;
-    void *extra;
     unsigned copy : 1;
     unsigned type : 7;
     unsigned size : 24;
@@ -236,9 +236,9 @@ LK_NS_END
 
 #ifdef _WIN32
 
-# ifndef WIN32_MEAN_AND_LEAN
-#   define WIN32_MEAN_AND_LEAN
-# endif
+#ifndef WIN32_LEAN_AND_MEAN
+# define WIN32_LEAN_AND_MEAN
+#endif
 # include <Windows.h>
 
 typedef HMODULE           lk_Module;
@@ -518,7 +518,7 @@ LK_API char *lk_strdup (lk_State *S, const char *s) {
     return newstr;
 }
 
-static char *lk_strncpy (char *dst, size_t n, const char *s) {
+LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
     size_t len = strlen(s);
     if (len >= n - 1) {
         memcpy(dst, s, n-1);
