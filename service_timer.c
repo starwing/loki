@@ -1,6 +1,8 @@
 #define LOKI_MODULE
 #include "loki_services.h"
+
 #include <assert.h>
+#include <string.h>
 
 
 #ifdef _WIN32
@@ -31,10 +33,17 @@ LK_API lk_Time lk_time(void) {
     uint64_t now = mach_absolute_time();
     return (zn_Time)((now - start) * time_info.numer / time_info.denom / 1000000);
 #else
+    static lk_Time start = -1;
     struct timespec ts;
+    lk_Time time;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
         return 1;
-    return (lk_Time)((lk_Time)ts.tv_sec*1000+ts.tv_nsec/1000000);
+    time = (lk_Time)((lk_Time)ts.tv_sec*1000+ts.tv_nsec/1000000);
+    if (start == -1) {
+        start = time;
+        return 0;
+    }
+    return time - start;
 #endif
 }
 
@@ -185,7 +194,7 @@ LK_API void lk_canceltimer(lk_Timer *timer) {
 }
 
 static void lkT_cleartimers(lk_TimerState *ts) {
-    free(ts->heap);
+    lk_free(ts->S, ts->heap);
     memset(ts, 0, sizeof(lk_TimerState));
     ts->nexttime = LK_FOREVER;
 }
@@ -195,7 +204,7 @@ static void lkT_updatetimers(lk_TimerState *ts, lk_Time current) {
     while (ts->heap_used && ts->heap[0]->emittime <= current) {
         lk_Signal sig = LK_SIGNAL;
         lk_Timer *timer = ts->heap[0];
-        lk_canceltimer(timer);
+        lkT_canceltimer(ts, timer);
         timer->emittime = current;
         sig.data = timer;
         lk_emit((lk_Slot*)timer->service, &sig);

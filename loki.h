@@ -904,10 +904,17 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
         else {
             struct timeval tv;
             struct timespec ts;
+            int sec  = waitms / 1000;
+            int usec = waitms % 1000 * 1000;
             gettimeofday(&tv, NULL);
-            ts.tv_sec  = tv.tv_sec + waitms / 1000;
-            ts.tv_nsec = (tv.tv_usec + (waitms % 1000) * 1000) * 1000;
+            if (tv.tv_usec + usec > 1000000) {
+                sec += 1;
+                usec = (tv.tv_usec + usec) - 1000000;
+            }
+            ts.tv_sec = tv.tv_sec + sec;
+            ts.tv_nsec = (tv.tv_usec + usec) * 1000;
             pthread_cond_timedwait(&poll->event, &poll->lock, &ts);
+            gettimeofday(&tv, NULL);
         }
     }
     lk_unlock(poll->lock);
