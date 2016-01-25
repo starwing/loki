@@ -1318,11 +1318,9 @@ static lk_Service *lkT_callhandlerL (lk_State *S, lk_Service *svr) {
         return NULL;
     }
 
-    if (ret == LK_OK) {
-        lk_lock(S->lock);
-        ++S->nservices;
-        lk_lock(svr->lock);
-    }
+    lk_lock(S->lock);
+    if (ret == LK_OK) ++S->nservices;
+    lk_lock(svr->lock);
     if (lkQ_empty(&svr->signals))
         svr->status = LK_SLEEPING;
     else
