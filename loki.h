@@ -93,6 +93,9 @@ LK_API int lk_discard (lk_State *S);
 
 LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud);
 
+LK_API void lk_log(lk_State *S, const char *fmt, ...);
+LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l);
+
 LK_API char *lk_getconfig (lk_State *S, const char *key);
 LK_API void  lk_setconfig (lk_State *S, const char *key, const char *value);
 
@@ -475,6 +478,7 @@ struct lk_State {
     lk_Table slots;
     lk_Table config;
     lk_Buffer path;
+    lk_Slot  *logger;
     unsigned  status;
     unsigned  harbor;
     size_t  nthreads;
@@ -1332,6 +1336,8 @@ static lk_Service *lkT_callhandlerL (lk_State *S, lk_Service *svr) {
     else
         lkQ_enqueue(&S->active_services, svr);
     lk_unlock(svr->lock);
+    if (strcmp(svr->slot.name, "log") == 0)
+        S->logger = &svr->slot;
     lk_unlock(S->lock);
     return svr;
 }
@@ -1619,6 +1625,28 @@ LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud) {
     cleanup->next = ctx->cleanups;
     ctx->cleanups = cleanup;
     return LK_OK;
+}
+
+LK_API void lk_log(lk_State *S, const char *fmt, ...) {
+    va_list l;
+    va_start(l, fmt);
+    lk_vlog(S, fmt, l);
+    va_end(l);
+}
+
+LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l) {
+    lk_Slot *logger = S->logger;
+    if (logger) {
+        lk_Signal sig = LK_SIGNAL;
+        lk_Buffer B;
+        lk_initbuffer(S, &B);
+        lk_addvfstring(&B, fmt, l);
+        sig.copy = 1;
+        sig.size = lk_buffsize(&B);
+        sig.data = lk_buffer(&B);
+        lk_emit(logger, &sig);
+        lk_freebuffer(&B);
+    }
 }
 
 LK_API char *lk_getconfig (lk_State *S, const char *key) {
