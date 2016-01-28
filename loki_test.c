@@ -1,26 +1,34 @@
-#define LK_DEBUG_MEM
 #define LOKI_IMPLEMENTATION
 #include "loki_services.h"
 
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_Signal ret = *sig;
+    lk_Signal ret;
     printf("msg: %s\n", (char*)sig->data);
-    sig->free = 0;
+	
+    lk_Service *log_svr = lk_require(S, "log");
+    LK_DEBUGLOG(log_svr, "get msg:[%s]", (char*)sig->data);
+
+    ret = *sig;
+    sig->copy = 0;
     lk_emit((lk_Slot*)sig->src, &ret);
     return LK_OK;
 }
 
 static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed) {
     lk_Slot *echo = lk_slot(S, "echo.echo");
+    lk_Signal ret = LK_SIGNAL;
     int *pi = (int*)ud;
+    ret.copy = 1;
+    ret.size = 13;
     if ((*pi)++ == 10) {
         lk_free(S, pi);
         lk_close(S);
         return 0;
     }
     printf("timer: %d: %u\n", *pi, elapsed);
-    lk_emitstring(echo, 0, 0, "Hello world!");
-    return 1;
+    ret.data = lk_strdup(S, "hello world!");
+    lk_emit(echo, &ret);
+    return 1000;
 }
 
 static int resp(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
@@ -44,14 +52,18 @@ static int loki_service_echo(lk_State *S) {
 }
 
 int main(void) {
-    lk_State *S = lk_newstate(NULL);
+    lk_State *S = lk_newstate();
     lk_openlibs(S);
     lk_setslothandler((lk_Slot*)S, resp, NULL);
 
     lk_requiref(S, "echo", loki_service_echo);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");
-    lk_emitstring(slot, 0, 0, "Hello World!");
+    lk_Signal sig = LK_SIGNAL;
+    sig.copy = 1;
+    sig.size = 13;
+    sig.data = lk_strdup(S, "hello world!");
+    lk_emit(slot, &sig);
 
     printf("thread count: %d\n", lk_start(S));
     lk_waitclose(S);
@@ -59,5 +71,5 @@ int main(void) {
     return 0;
 }
 
-/* unixcc: flags+='-O0 -ggdb' input+='service_*.c' libs+='-pthread -ldl -lrt' */
-/* win32cc: input+='service_*.c' libs+='-lws2_32' */
+/* unixcc: input+='service_timer.c service_log.c' libs+='-pthread -ldl -lrt' */
+/* win32cc: input+='service_timer.c service_log.c' */
