@@ -52,9 +52,9 @@ typedef void   lk_RecvFromHandler (lk_State *S, void *ud, lk_Udp *udp, unsigned 
                                    const char *buff, unsigned count,
                                    const char *addr, unsigned port);
 
-LK_API void lk_setheaderhandler   (lk_Service *svr, lk_HeaderHandler *h, void *ud);
-LK_API void lk_setpackethandler   (lk_Service *svr, lk_PacketHandler *h, void *ud);
-LK_API void lk_setrecvfromhandler (lk_Service *svr, lk_RecvFromHandler *h, void *ud);
+LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud);
+LK_API void lk_setonpacket (lk_Service *svr, lk_PacketHandler *h, void *ud);
+LK_API void lk_setonudpmsg (lk_Service *svr, lk_RecvFromHandler *h, void *ud);
 
 LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_TcpHandler *h, void *ud);
 LK_API void       lk_delaccept (lk_Accept *accept);
