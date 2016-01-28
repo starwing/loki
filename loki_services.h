@@ -14,9 +14,6 @@ typedef unsigned lk_Time;
 # define lk_Time lk_Time
 #endif /* lk_Time */
 
-
-LK_NS_BEGIN
-
 typedef struct lk_Timer lk_Timer;
 
 typedef lk_Time lk_TimerHandler (lk_State *S, void *ud, lk_Timer *timer, lk_Time delayed);
@@ -41,6 +38,13 @@ LK_API void lk_canceltimer (lk_Timer *timer);
 /* log service */
 
 LKMOD_API int loki_service_log(lk_State *S);
+
+LK_API int lk_logemit(lk_Service* svr, const char* fmt, ...);
+
+#define LK_DEBUGLOG(svr, fmt, args...) \
+	lk_logemit(svr, "D[%s][%d]%s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args)
+#define LK_ERRORLOG(svr, fmt, args...) \
+	lk_logemit(svr, "E[%s][%d]%s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args)
 
 
 /* socket service */
@@ -74,8 +78,8 @@ LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port,
                         lk_ConnectHandler *h, void *ud);
 LK_API void lk_deltcp  (lk_Tcp *tcp);
 
-LK_API void *lk_gettcpdata (lk_Tcp *tcp);
-LK_API void  lk_settcpdata (lk_Tcp *tcp, void *data);
+LK_API unsigned lk_getsession (lk_Tcp *tcp);
+LK_API void     lk_setsession (lk_Tcp *tcp, unsigned session);
 
 LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size);
 
@@ -87,28 +91,17 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,
                        const char *addr, unsigned port);
 
 
-LK_NS_END
-
 #endif /* loki_services_h */
 
 #if defined(LOKI_IMPLEMENTATION) && !defined(loki_services_implemented)
 #define loki_services_implemented
 
-LK_NS_BEGIN
-
-
 LK_API int lk_openlibs(lk_State *S) {
     lk_preload(S, "timer",  loki_service_timer);
     lk_preload(S, "socket", loki_service_socket);
+    lk_preload(S, "log",    loki_service_log);
     return LK_OK;
 }
 
 
-LK_NS_END
-
 #endif
-/* win32cc: flags+='-s -O3 -mdll'
- * win32cc: input='lokilib.c service_*.c' output='loki.dll' libs+='-lws2_32'
- * unixcc: flags+='-Wextra -s -O3 -fPIC -shared'
- * unixcc: input='lokilib.c service_*.c' output='loki.so' */
-
