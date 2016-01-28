@@ -130,7 +130,7 @@ LK_API lk_Slot *lk_newslot (lk_State *S, const char *name, lk_SignalHandler *h, 
 LK_API lk_Slot *lk_slot    (lk_State *S, const char *name);
 
 LK_API int lk_emit       (lk_Slot *slot, const lk_Signal *sig);
-LK_API int lk_emitdata   (lk_Slot *slot, unsigned type, unsigned session, const char *data, size_t size);
+LK_API int lk_emitdata   (lk_Slot *slot, unsigned type, unsigned session, const void *data, size_t size);
 LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const char *s);
 
 LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_SignalHandler *h, void *ud);
@@ -173,6 +173,8 @@ LK_API char *lk_prepbuffsize (lk_Buffer *B, size_t len);
 LK_API int lk_addlstring  (lk_Buffer *B, const char *s, size_t len);
 LK_API int lk_addvfstring (lk_Buffer *B, const char *fmt, va_list l);
 LK_API int lk_addfstring  (lk_Buffer *B, const char *fmt, ...);
+
+LK_API void lk_replacebuffer (lk_Buffer *B, char origch, char newch);
 
 LK_API const char *lk_buffresult (lk_Buffer *B);
 
@@ -485,6 +487,7 @@ struct lk_State {
     lk_Table config;
     lk_Buffer path;
     lk_Slot  *logger;
+    lk_Slot  *monitor;
     volatile unsigned status;
     unsigned  harbor;
     size_t  nthreads;
@@ -609,6 +612,13 @@ LK_API int lk_addfstring (lk_Buffer *B, const char *fmt, ...) {
     ret = lk_addvfstring(B, fmt, l);
     va_end(l);
     return ret;
+}
+
+LK_API void lk_replacebuffer (lk_Buffer *B, char origch, char newch) {
+    size_t i;
+    for (i = 0; i < B->size; ++i)
+        if (B->buff[i] == origch)
+            B->buff[i] = newch;
 }
 
 LK_API const char *lk_buffresult (lk_Buffer *B) {
@@ -1156,7 +1166,7 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     return ret;
 }
 
-LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, const char *data, size_t size) {
+LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, const void *data, size_t size) {
     lk_Signal sig = LK_SIGNAL;
     sig.copy = 1;
     sig.type = type;
@@ -1225,28 +1235,51 @@ static lk_Service *lkT_newservice (lk_State *S, const char *name, lk_ServiceHand
     return (lk_Service*)e->value;
 }
 
+static const char *lkT_makemodname (lk_Buffer *B, const char *p[4]) {
+    const char *start = p[0], *end = p[1], *name = p[2], *nend = p[3];
+    lk_resetbuffer(B);
+    for (; start < end && *start != ';'; ++start) {
+        if (*start == '?')
+            lk_addlstring(B, name, nend-name);
+        else
+            lk_addchar(B, *start);
+    }
+    if (lk_buffsize(B) != 0)
+        lk_addchar(B, '\0');
+    return start;
+}
+
 static lk_Module lkT_findmodule (lk_State *S, const char *name, lk_ServiceHandler **h) {
-    const char *start = lk_buffer(&S->path);
-    const char *end = start + lk_buffsize(&S->path);
+    union {
+        const char *p[4];
+        struct { const char *start, *end, *name, *nend; } s;
+    } u;
+    const char *tmp, *dot = strchr(name, '.');
     lk_Module module;
     lk_Buffer B;
+    u.s.start = lk_buffer(&S->path);
+    u.s.end   = u.s.start + lk_buffsize(&S->path);
+    u.s.name  = name;
+    u.s.nend  = name + strlen(name);
     lk_initbuffer(S, &B);
 
 redo:
-    lk_resetbuffer(&B);
-    for (; start < end && *start != ';'; ++start) {
-        if (*start == '?')
-            lk_addstring(&B, name);
-        else
-            lk_addchar(&B, *start);
-    }
+    tmp = u.s.start;
+    u.s.start = lkT_makemodname(&B, u.p);
     if (lk_buffsize(&B) == 0) goto next;
-    lk_addchar(&B, '\0');
     module = lk_loadlib(lk_buffer(&B));
-    if (module == NULL) goto next;
+    if (module == NULL) {
+        if (dot) {
+            u.s.start = tmp;
+            u.s.start = lkT_makemodname(&B, u.p);
+            module = lk_loadlib(lk_buffer(&B));
+        }
+        if (module == NULL) goto next;
+    }
     lk_resetbuffer(&B);
     lk_addstring(&B, LK_PREFIX);
     lk_addstring(&B, name);
+    if (dot) lk_replacebuffer(&B, '.', '_');
     *h = (lk_ServiceHandler*)lk_getaddr(module, lk_buffer(&B));
     if (h == NULL) {
         lk_freelib(module);
@@ -1255,8 +1288,8 @@ redo:
     return module;
 
 next:
-    if (*start == ';') {
-        ++start;
+    if (*u.s.start == ';') {
+        ++u.s.start;
         goto redo;
     }
     return NULL;
@@ -1332,8 +1365,10 @@ static void lkT_delserviceL (lk_State *S, lk_Service *svr) {
     lk_freelock(svr->lock);
     if (svr->module != NULL)
         lk_freelib(svr->module);
-    if (&svr->slot == S->logger)
-        S->logger = NULL;
+    if (&svr->slot == S->logger)  S->logger = NULL;
+    if (&svr->slot == S->monitor) S->monitor = NULL;
+    if (S->monitor)
+        lk_emitdata(S->monitor, 1, 0, &svr, sizeof(svr));
     if (svr != &S->root) lk_free(S, svr);
     if (--S->nservices == 0) {
         S->status = LK_STOPPING;
@@ -1370,8 +1405,15 @@ static lk_Service *lkT_callhandlerL (lk_State *S, lk_Service *svr) {
     else
         lkQ_enqueue(&S->active_services, svr);
     lk_unlock(svr->lock);
-    if (strcmp(svr->slot.name, "log") == 0)
+    if (S->monitor) {
+        lk_Service *svrs[2];
+        svrs[0] = lk_self(S), svrs[1] = svr;
+        lk_emitdata(S->monitor, 0, 0, svrs, sizeof(*svrs));
+    }
+    if (!S->logger && strcmp(svr->slot.name, "log") == 0)
         S->logger = &svr->slot;
+    if (!S->monitor && strcmp(svr->slot.name, "monitor") == 0)
+        S->monitor = &svr->slot;
     lk_unlock(S->lock);
     return svr;
 }
@@ -1461,7 +1503,7 @@ static void lkT_dispatchL (lk_State *S, lk_Service *svr) {
         lk_Slot *slot = node->slot;
         lk_Service *src = node->data.src;
         lk_pushcontext(S, &ctx, svr);
-        if (src && src->refactor) {
+        if (src && src->refactor && slot != S->logger) {
             lk_try(S, &ctx, ret =
                     src->refactor(S, src->ud, slot, &node->data));
         }
