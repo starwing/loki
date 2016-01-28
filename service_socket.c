@@ -215,6 +215,7 @@ static void lkL_onpacket(void *ud, const char *buff, size_t size) {
 static lk_Tcp *lkL_preparetcp(lk_ZNetState *zs, lk_Service *svr, zn_Tcp *ztcp) {
     int ret;
     lkL_getobject(tcp, lk_Tcp);
+    tcp->service = svr;
     tcp->handlers = lkL_gethandlers(zs, svr);
     zn_initrecvbuffer(&tcp->recv);
     zn_initsendbuffer(&tcp->send);
@@ -238,6 +239,7 @@ static lk_Tcp *lkL_preparetcp(lk_ZNetState *zs, lk_Service *svr, zn_Tcp *ztcp) {
 static lk_Udp *lkL_prepareudp(lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
     int ret;
     lkL_getobject(udp, lk_Udp);
+    udp->service = svr;
     udp->handlers = lkL_gethandlers(zs, svr);
     zn_initbuffer(&udp->buff);
     ret = zn_recvfrom(zudp, zn_buffer(&udp->buff), zn_bufflen(&udp->buff),
@@ -299,8 +301,11 @@ static void lkL_onconnect (void *ud, zn_Tcp *ztcp, unsigned err) {
     sig.type = LK_SIGTYPE_TCP_CONNECT;
     sig.session = err;
     sig.data = cmd;
-    if ((sig.session = err) == ZN_OK)
+    if ((sig.session = err) == ZN_OK) {
         cmd->u.tcp = lkL_preparetcp(zs, cmd->service, ztcp);
+        lk_log(zs->S, "I[connect] " lk_loc("%s:%d connected"),
+            cmd->info.addr, cmd->info.port);
+    }
     else {
         zn_deltcp(ztcp);
         lk_log(zs->S, "E[connect] " lk_loc("%s (%s:%d)"),
