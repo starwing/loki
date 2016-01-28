@@ -1421,7 +1421,7 @@ static lk_Service *lkT_callhandlerL (lk_State *S, lk_Service *svr) {
     lk_pushcontext(S, &ctx, svr);
     lk_try(S, &ctx, ret = svr->handler(S));
     lk_popcontext(S, &ctx);
-    if (ctx.status == LK_ERR || ret < 0) {
+    if (ctx.status == LK_ERR || ret < 0 || S->status == LK_STOPPING) {
         lkT_delserviceL(S, svr);
         return NULL;
     }
@@ -1557,12 +1557,14 @@ static void lkT_dispatchL (lk_State *S, lk_Service *svr) {
     lk_lock(S->lock);
     lkQ_merge(&S->freed_signals, &freed_signals);
     lk_lock(svr->lock);
-    if (!lkQ_empty(&svr->signals))
-        lkT_enqueue(S, svr);
-    else if (svr->status != LK_STOPPING)
-        svr->status = LK_SLEEPING;
-    else if (svr->pending == 0)
-        should_delete = 1;
+    if (!svr->inqueue) {
+        if (!lkQ_empty(&svr->signals))
+            lkT_enqueue(S, svr);
+        else if (svr->status != LK_STOPPING)
+            svr->status = LK_SLEEPING;
+        else if (svr->pending == 0)
+            should_delete = 1;
+    }
     lk_unlock(svr->lock);
     lk_unlock(S->lock);
 
@@ -1633,24 +1635,21 @@ err_tls:
 LK_API void lk_close (lk_State *S) {
     lk_Context *ctx = lkS_context(S);
     lk_Service *svr;
-    if (ctx == NULL) {
-        if (S->status == LK_STOPPING) {
-            lkG_delstate(S);
-            return;
-        }
-    }
-    else if ((svr = ctx->current) != NULL) {
+    if (ctx == NULL && S->status == LK_STOPPING)
+        lkG_delstate(S);
+    if (ctx != NULL && (svr = ctx->current) != NULL) {
+        unsigned status;
         lk_lock(S->lock);
         lk_lock(svr->lock);
-        if (svr->status == LK_SLEEPING)
-            lkT_enqueue(S, svr);
+        status = svr->status;
         svr->status = LK_STOPPING;
+        if (status == LK_SLEEPING) {
+            lkT_enqueue(S, svr);
+            lk_signal(S->event);
+        }
         lk_unlock(svr->lock);
         lk_unlock(S->lock);
     }
-    lk_lock(S->lock);
-    lk_signal(S->event);
-    lk_unlock(S->lock);
 }
 
 LK_API void lk_setthreads (lk_State *S, int threads) {
