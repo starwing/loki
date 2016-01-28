@@ -490,7 +490,8 @@ struct lk_Service {
     lk_Slot  *slots;
     lk_Slot  *polls;
     volatile unsigned status;
-    unsigned weak : 1;
+    unsigned weak    : 1;
+    unsigned inqueue : 1;
     lk_Atomic pending; /* pending signals in queue */
     lk_Module module;
     lk_Lock   lock;
@@ -799,6 +800,12 @@ LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry) {
 
 static void lkT_dispatchL (lk_State *S, lk_Service *svr);
 
+static void lkT_enqueue (lk_State *S, lk_Service *svr)
+{ lkQ_enqueue(&S->active_services, svr); svr->inqueue = 1; }
+
+static void lkT_dequeue (lk_State *S, lk_Service **svr)
+{ lkQ_dequeue(&S->active_services, *svr); if (*svr) (*svr)->inqueue = 0; }
+
 #ifdef _WIN32
 
 static size_t lkP_getcpucount (void) {
@@ -830,7 +837,7 @@ static DWORD WINAPI lkP_worker (void *lpParameter) {
         lk_Service *svr;
         WaitForSingleObject(S->event, INFINITE);
         lk_lock(S->lock);
-        lkQ_dequeue(&S->active_services, svr);
+        lkT_dequeue(S, &svr);
         if ((status = S->status) == LK_STOPPING)
             lk_signal(S->event);
         lk_unlock(S->lock);
@@ -839,7 +846,7 @@ static DWORD WINAPI lkP_worker (void *lpParameter) {
             lkT_dispatchL(S, svr);
             ctx.current = NULL;
             lk_lock(S->lock);
-            lkQ_dequeue(&S->active_services, svr);
+            lkT_dequeue(S, &svr);
             lk_unlock(S->lock);
         }
     }
@@ -900,7 +907,7 @@ static void *lkP_worker (void *ud) {
     while (status == LK_WORKING) {
         lk_Service *svr;
         for (;;) {
-            lkQ_dequeue(&S->active_services, svr);
+            lkT_dequeue(S, &svr);
             status = S->status;
             if (svr != NULL || status != LK_WORKING)
                 break;
@@ -914,7 +921,7 @@ static void *lkP_worker (void *ud) {
             lkT_dispatchL(S, svr);
             ctx.current = NULL;
             lk_lock(S->lock);
-            lkQ_dequeue(&S->active_services, svr);
+            lkT_dequeue(S, &svr);
         }
     }
     lk_unlock(S->lock);
@@ -1142,7 +1149,7 @@ static int lkS_emitslotL (lk_State *S, lk_Service *svr, lk_SignalNode *node) {
     else {
         lkQ_enqueue(&svr->signals, node);
         if (svr->status == LK_SLEEPING) {
-            lkQ_enqueue(&S->active_services, svr);
+            lkT_enqueue(S, svr);
             svr->status = LK_WORKING;
             lk_signal(S->event);
         }
@@ -1426,7 +1433,7 @@ static lk_Service *lkT_callhandlerL (lk_State *S, lk_Service *svr) {
     if (lkQ_empty(&svr->signals))
         svr->status = LK_SLEEPING;
     else
-        lkQ_enqueue(&S->active_services, svr);
+        lkT_enqueue(S, svr);
     lk_unlock(svr->lock);
     if (S->monitor) {
         lk_Service *svrs[2];
@@ -1538,8 +1545,11 @@ static void lkT_dispatchL (lk_State *S, lk_Service *svr) {
             lk_free(S, node->data.data);
         lkQ_enqueue(&freed_signals, node);
         node = next;
-        if (src->status == LK_STOPPING && lk_dec(src->pending) == 0)
-            lkT_delserviceL(S, src);
+        if (src->status == LK_STOPPING && lk_dec(src->pending) == 0) {
+            lk_lock(S->lock);
+            if (!svr->inqueue) lkT_enqueue(S, svr);
+            lk_unlock(S->lock);
+        }
     }
 
     /* cleanup */
@@ -1548,7 +1558,7 @@ static void lkT_dispatchL (lk_State *S, lk_Service *svr) {
     lkQ_merge(&S->freed_signals, &freed_signals);
     lk_lock(svr->lock);
     if (!lkQ_empty(&svr->signals))
-        lkQ_enqueue(&S->active_services, svr);
+        lkT_enqueue(S, svr);
     else if (svr->status != LK_STOPPING)
         svr->status = LK_SLEEPING;
     else if (svr->pending == 0)
@@ -1633,7 +1643,7 @@ LK_API void lk_close (lk_State *S) {
         lk_lock(S->lock);
         lk_lock(svr->lock);
         if (svr->status == LK_SLEEPING)
-            lkQ_enqueue(&S->active_services, svr);
+            lkT_enqueue(S, svr);
         svr->status = LK_STOPPING;
         lk_unlock(svr->lock);
         lk_unlock(S->lock);
