@@ -93,11 +93,15 @@ LK_API int lk_discard (lk_State *S);
 
 LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud);
 
+LK_API char *lk_getconfig (lk_State *S, const char *key);
+LK_API void  lk_setconfig (lk_State *S, const char *key, const char *value);
+
 LK_API void lk_log(lk_State *S, const char *fmt, ...);
 LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l);
 
-LK_API char *lk_getconfig (lk_State *S, const char *key);
-LK_API void  lk_setconfig (lk_State *S, const char *key, const char *value);
+#define lk_str_(str) # str
+#define lk_str(str) lk_str_(str)
+#define lk_loc(str) __FILE__ ":" lk_str(__LINE__) ": " str
 
 
 /* service routines */
@@ -1627,28 +1631,6 @@ LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud) {
     return LK_OK;
 }
 
-LK_API void lk_log(lk_State *S, const char *fmt, ...) {
-    va_list l;
-    va_start(l, fmt);
-    lk_vlog(S, fmt, l);
-    va_end(l);
-}
-
-LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l) {
-    lk_Slot *logger = S->logger;
-    if (logger) {
-        lk_Signal sig = LK_SIGNAL;
-        lk_Buffer B;
-        lk_initbuffer(S, &B);
-        lk_addvfstring(&B, fmt, l);
-        sig.copy = 1;
-        sig.size = lk_buffsize(&B);
-        sig.data = lk_buffer(&B);
-        lk_emit(logger, &sig);
-        lk_freebuffer(&B);
-    }
-}
-
 LK_API char *lk_getconfig (lk_State *S, const char *key) {
     lk_Entry *e;
     char *value = NULL;
@@ -1679,6 +1661,28 @@ LK_API void lk_setconfig (lk_State *S, const char *key, const char *value) {
         e->value = (void*)&e->key[keysize + 1];
     }
     lk_unlock(S->lock);
+}
+
+LK_API void lk_log(lk_State *S, const char *fmt, ...) {
+    va_list l;
+    va_start(l, fmt);
+    lk_vlog(S, fmt, l);
+    va_end(l);
+}
+
+LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l) {
+    lk_Slot *logger = S->logger;
+    if (logger) {
+        lk_Signal sig = LK_SIGNAL;
+        lk_Buffer B;
+        lk_initbuffer(S, &B);
+        lk_addvfstring(&B, fmt, l);
+        sig.copy = 1;
+        sig.size = lk_buffsize(&B);
+        sig.data = lk_buffer(&B);
+        lk_emit(logger, &sig);
+        lk_freebuffer(&B);
+    }
 }
 
 
