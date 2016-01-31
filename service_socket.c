@@ -174,7 +174,7 @@ static void lkL_postdeletor (void *ud, zn_State *S) {
     zn_deinitialize();
     while (lk_nextentry(&zs->handlers, &e))
         lk_free(zs->S, e->value);
-    lk_freetable(&zs->handlers);
+    lk_freetable(&zs->handlers, 0);
     for (i = 0; i < LK_TYPE_COUNT; ++i) {
         while (zs->freed[i]) {
             lk_NetObject *next = zs->freed[i]->next;
@@ -681,10 +681,10 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned size, const char 
 LKMOD_API int loki_service_socket (lk_State *S) {
     lk_ZNetState *zs = lkL_newstate(S);
     lk_Service *svr = lk_self(S);
-    lk_setdata(svr, zs);
+    lk_setdata(S, zs);
     zs->poll = lk_newpoll(S, "poll", lkL_poller, zs);
     lk_setslothandler((lk_Slot*)svr, lkL_deletor, zs);
-    lk_setrefactor(svr, lkL_refactor, zs);
+    lk_setrefactor(S, lkL_refactor, zs);
     return LK_WEAK;
 }
 

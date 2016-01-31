@@ -281,10 +281,10 @@ static int lkT_deletor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
 LKMOD_API int loki_service_timer(lk_State *S) {
     lk_TimerState *ts = lkT_newstate(S);
     lk_Service *svr = lk_self(S);
-    lk_setdata(svr, ts);
+    lk_setdata(S, ts);
     ts->poll = lk_newpoll(S, "poll", lkT_poller, ts);
     lk_setslothandler((lk_Slot*)svr, lkT_deletor, ts);
-    lk_setrefactor(svr, lkT_refactor, (void*)ts);
+    lk_setrefactor(S, lkT_refactor, (void*)ts);
     return LK_WEAK;
 }
 
