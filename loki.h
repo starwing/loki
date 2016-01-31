@@ -41,7 +41,8 @@
 
 #ifndef LK_PATH
 # ifdef _WIN32
-#   define LK_PATH "!\\services\\?.dll;" "!\\..\\services\\?.dll;" "!\\?.dll"
+#   define LK_PATH "!\\services\\?.dll;" "!\\..\\services\\?.dll;" "!\\?.dll;" \
+                   ".\\services\\?.dll;" "..\\services\\?.dll;" ".\\?.dll"
 # else
 #   define LK_PATH "services/?.so;" "../services/?.so;" "./?.so"
 # endif
@@ -157,6 +158,7 @@ typedef struct lk_Buffer lk_Buffer;
 #define lk_buffer(B)      ((B)->buff)
 #define lk_buffsize(B)    ((B)->size)
 #define lk_resetbuffer(B) ((B)->size = 0)
+#define lk_addsize(B,sz)  ((B)->size += (sz))
 #define lk_addchar(B,ch)  (*lk_prepbuffsize((B), 1) = (ch), ++(B)->size)
 #define lk_addstring(B,s) lk_addlstring((B),(s),strlen(s))
 
@@ -345,7 +347,7 @@ typedef pthread_t         lk_Thread;
     (n) = (h)->first;                       \
     if ((n) == (h)->last)                   \
         (h)->first = (h)->last = NULL;      \
-    else                                    \
+    else if ((h)->first != NULL)            \
         (h)->first = (h)->first->next;    } while (0)
 
 #define lkQ_merge(h, n)                do { \
@@ -371,18 +373,18 @@ typedef pthread_t         lk_Thread;
 
 # if defined(__cplusplus) && !defined(LK_USE_LONGJMP)
 #   define lk_throw(S,c) throw(c)
-#   define lk_try(S,c,a) try { a; } catch(...) \
-                         { if ((c)->status == 0) (c)->status = LK_ERR; }
+#   define lk_try(S,c,a) do { try { a; } catch(...) \
+              { if ((c)->status == 0) (c)->status = LK_ERR; } } while (0)
 #   define lk_JmpBuf     int  /* dummy variable */
 
 # elif _WIN32 /* ISO C handling with long jumps */
 #   define lk_throw(S,c) longjmp((c)->b, 1)
-#   define lk_try(S,c,a) if (setjmp((c)->b) == 0) { a; }
+#   define lk_try(S,c,a) do { if (setjmp((c)->b) == 0) { a; } } while (0)
 #   define lk_JmpBuf     jmp_buf
 
 # else /* in POSIX, try _longjmp/_setjmp (more efficient) */
 #   define lk_throw(L,c) _longjmp((c)->b, 1)
-#   define lk_try(L,c,a) if (_setjmp((c)->b) == 0) { a; }
+#   define lk_try(L,c,a) do { if (_setjmp((c)->b) == 0) { a; } } while (0)
 #   define lk_JmpBuf     jmp_buf
 # endif
 
@@ -609,9 +611,8 @@ LK_API int lk_addvfstring (lk_Buffer *B, const char *fmt, va_list l) {
     va_end(l_count);
     if (len <= 0) return 0;
     if (len > init_size) {
-        if ((ptr = lk_prepbuffsize(B, len+1)) == NULL)
-            return 0;
-        vsnprintf(ptr, len, fmt, l);
+        ptr = lk_prepbuffsize(B, len + 1);
+        vsnprintf(ptr, len+1, fmt, l);
     }
     return B->size += len;
 }
@@ -808,6 +809,18 @@ static size_t lkP_getcpucount (void) {
     SYSTEM_INFO info;
     GetSystemInfo(&info);
     return info.dwNumberOfProcessors;
+}
+
+static void lkP_getmodulename(lk_Buffer *B) {
+    char *buff = lk_prepbuffsize(B, MAX_PATH);
+    DWORD size;
+    if ((size = GetModuleFileName(GetModuleHandle(NULL), buff, MAX_PATH)) == 0)
+        lk_addchar(B, '.');
+    else {
+        while (--size != 0 && buff[size] != '/' && buff[size] != '\\')
+            ;
+        lk_addsize(B, size);
+    }
 }
 
 static DWORD WINAPI lkP_poller (void *lpParameter) {
@@ -1073,12 +1086,24 @@ static void lkS_emitslotGS (lk_State *S, lk_Service *svr, lk_SignalNode *node) {
     lk_unlock(S->lock);
 }
 
+static int lkS_check (lk_State *S, const char *tag, const char *name) {
+    if (strlen(name) >= LK_MAX_NAMESIZE) {
+        lk_log(S, "E[%s]" lk_loc("slot name '%s' too long"), tag, name);
+        return 0;
+    }
+    if (lk_self(S)->status >= LK_STOPPING) {
+        lk_log(S, "E[%s]"
+                lk_loc("can not create slot after service destroyed"), tag);
+        return 0;
+    }
+    return 1;
+}
+
 LK_API lk_Slot *lk_newslot (lk_State *S, const char *name, lk_SignalHandler *h, void *ud) {
     lk_Service *svr = lk_self(S);
     lk_Slot *slot = NULL;
     lk_Buffer B;
-    if (lk_self(S)->status >= LK_STOPPING)
-        return NULL;
+    if (!lkS_check(S, "newslot", name)) return NULL;
     name = lkS_name(svr, &B, name);
     slot = lkS_new(S, sizeof(lk_Slot*), lk_buffer(&B));
     lk_freebuffer(&B);
@@ -1091,6 +1116,8 @@ LK_API lk_Slot *lk_newslot (lk_State *S, const char *name, lk_SignalHandler *h, 
         svr->slots = slot;
     }
     lk_unlock(S->lock);
+    if (slot == NULL)
+        lk_log(S, "E[newslot]", lk_loc("slot '%s' exists"), name);
     return slot;
 }
 
@@ -1098,8 +1125,7 @@ LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_SignalHandler *h, 
     lk_Service *svr = lk_self(S);
     lk_Poll *poll;
     lk_Buffer B;
-    if (lk_self(S)->status >= LK_STOPPING)
-        return NULL;
+    if (!lkS_check(S, "newpoll", name)) return NULL;
     name = lkS_name(svr, &B, name);
     poll = (lk_Poll*)lkS_new(S, sizeof(lk_Poll), name);
     lk_freebuffer(&B);
@@ -1115,6 +1141,10 @@ LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_SignalHandler *h, 
         svr->polls = &poll->slot;
     }
     lk_unlock(S->lock);
+    if (poll == NULL) {
+        lk_log(S, "E[newpoll]", lk_loc("poll '%s' exists"), name);
+        return NULL;
+    }
     return &poll->slot;
 }
 
@@ -1124,9 +1154,11 @@ LK_API int lk_register (lk_State *S, const lk_Reg *slots, void *ud) {
     const lk_Reg *begin = slots;
     lk_initbuffer(S, &B);
     lk_lock(S->lock);
-    while (slots->name != NULL) {
-        lk_Slot *slot = lkS_new(S, sizeof(lk_Slot),
-                lkS_name(svr, &B, slots->name));
+    for (; slots->name != NULL; ++slots) {
+        lk_Slot *slot;
+        if (lkS_check(S, "newslot", slots->name))
+            continue;
+        slot = lkS_new(S, sizeof(lk_Slot), lkS_name(svr, &B, slots->name));
         lk_freebuffer(&B);
         slot->service = svr;
         slot->handler = slots->handler;
@@ -1135,7 +1167,8 @@ LK_API int lk_register (lk_State *S, const lk_Reg *slots, void *ud) {
             slot->next = svr->slots;
             svr->slots = slot;
         }
-        ++slots;
+        if (slot == NULL)
+            lk_log(S, "E[newslot]", lk_loc("slot '%s' exists"), slots->name);
     }
     lk_unlock(S->lock);
     return slots - begin;
@@ -1151,6 +1184,8 @@ LK_API lk_Slot *lk_slot (lk_State *S, const char *name) {
     }
     if (slot == NULL)
         slot = lkS_findslotG(S, name);
+    if (slot == NULL)
+        lk_log(S, "E[slot]" lk_loc("slot '%s' not exists"), name);
     return slot;
 }
 
@@ -1160,8 +1195,10 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     lk_SignalNode *node = NULL;
     if (S->status == LK_STOPPING
             || self->status >= LK_STOPPING
-            || svr->status >= LK_STOPPING) 
+            || svr->status >= LK_STOPPING) {
+        lk_log(S, "E[emit]" lk_loc("can not emit signal"));
         return LK_ERR;
+    }
     node = lkS_fetchsignalG(S, sig);
     node->slot = slot;
     if (node->data.src == NULL)
@@ -1199,7 +1236,10 @@ LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const 
 }
 
 LK_API void lk_setslothandler (lk_Slot *slot, lk_SignalHandler *h, void *ud) {
-    if (slot->service->status == LK_INITIALING) {
+    if (slot->service->status != LK_INITIALING)
+        lk_log(slot->S, "E[setslothandler]" lk_loc("can not set slot handler "
+                    "after service initialized"));
+    else {
         slot->handler = h;
         slot->ud = ud;
     }
@@ -1250,74 +1290,6 @@ static lk_Service *lkT_newservice (lk_State *S, const char *name) {
     return svr;
 }
 
-static const char *lkT_modpath (lk_Buffer *B, const char *p[4]) {
-    const char *start = p[0], *end = p[1], *name = p[2], *nend = p[3];
-    lk_resetbuffer(B);
-    for (; start < end && *start != ';'; ++start) {
-        if (*start == '?')
-            lk_addlstring(B, name, nend-name);
-        else
-            lk_addchar(B, *start);
-    }
-    if (lk_buffsize(B) != 0)
-        lk_addchar(B, '\0');
-    return start;
-}
-
-static lk_Module lkT_findmodule (lk_State *S, const char *name, lk_ServiceHandler **h) {
-    struct ctx { const char *start, *end, *name, *nend; } *s;
-    union { const char *p[4]; struct ctx s; } u;
-    const char *dot = strchr(name, '.');
-    lk_Module module = NULL;
-    lk_Buffer B;
-    s = &u.s;
-    s->start = S->path.buff, s->end = s->start + S->path.size;
-    s->name  = name,         s->nend  = name + strlen(name);
-    lk_initbuffer(S, &B);
-    for (; *s->start; ++s->start) {
-        const char *current = s->start;
-        s->start = lkT_modpath(&B, u.p);
-        if (lk_buffsize(&B) == 0) continue;
-        module = lk_loadlib(lk_buffer(&B));
-        if (module == NULL && dot) {
-            s->start = current;
-            s->start = lkT_modpath(&B, u.p);
-            module = lk_loadlib(lk_buffer(&B));
-        }
-        if (module == NULL) continue;
-        lk_resetbuffer(&B);
-        lk_addstring(&B, LK_PREFIX);
-        lk_addstring(&B, name);
-        if (dot) lk_replacebuffer(&B, '.', '_');
-        *h = (lk_ServiceHandler*)lk_getaddr(module, lk_buffer(&B));
-        if (*h != NULL) return module;
-        lk_freelib(module);
-    }
-    return module;
-}
-
-static lk_Service *lkT_preload (lk_State *S, const char *name, lk_ServiceHandler **h) {
-    lk_Entry *e = lk_getentry(&S->preload, name);
-    if (e != NULL && e->value != NULL) {
-        *h = (lk_ServiceHandler*)(ptrdiff_t)e->value;
-        lk_delentry(&S->slots, e, 1);
-        return lkT_newservice(S, name);
-    }
-    return NULL;
-}
-
-static lk_Service *lkT_module (lk_State *S, const char *name, lk_ServiceHandler **h) {
-    lk_Module module;
-    lk_Service *svr = NULL;
-    if ((module = lkT_findmodule(S, name, h)) != NULL
-            && (svr = lkT_newservice(S, name)) != NULL) {
-        svr->module = module;
-        return svr;
-    }
-    if (module) lk_freelib(module);
-    return NULL;
-}
-
 static void lkT_freeslotsG (lk_State *S, lk_Service *svr) {
     lk_Slot *polls;
     lk_lock(S->lock);
@@ -1363,10 +1335,41 @@ static void lkT_delserviceG (lk_State *S, lk_Service *svr) {
     if (svr != &S->root) lk_free(S, svr);
 }
 
-static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHandler *h) {
-    lk_Event event, *pevent;
+static lk_Service *lkT_callinitGS (lk_State *S, lk_Service *svr, lk_ServiceHandler *h) {
     lk_Context ctx;
     int ret = LK_OK;
+
+    lk_pushcontext(S, &ctx, svr);
+    lk_try(S, &ctx, ret = h(S));
+    lk_popcontext(S, &ctx);
+
+    assert(svr->status != LK_ZOMBIE); /* not in queue */
+    if (ctx.status == LK_ERR || ret < 0 || svr->status == LK_STOPPING) {
+        lkT_delserviceG(S, svr);
+        return NULL;
+    }
+
+    lk_lock(S->lock);
+    lk_lock(svr->lock);
+    if (ret == LK_WEAK) svr->weak = 1;
+    else ++S->nservices;
+    if (svr->event) {
+        lk_freeevent(*svr->event);
+        svr->event = NULL;
+    }
+    svr->status = LK_WORKING;
+    if (lkQ_empty(&svr->signals))
+        svr->status = LK_SLEEPING;
+    else
+        lkQ_enqueue(&S->active_services, svr);
+    lk_unlock(svr->lock);
+    lkG_onopen(S, svr);
+    lk_unlock(S->lock);
+    return svr;
+}
+
+static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHandler *h) {
+    lk_Event event, *pevent;
     int need_initialize, skip_initialize = 0;
 
     if (!svr) return NULL;
@@ -1398,42 +1401,12 @@ static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHa
         return svr;
     }
 
-    lk_pushcontext(S, &ctx, svr);
-    lk_try(S, &ctx, ret = h(S));
-    lk_popcontext(S, &ctx);
-    assert(svr->status != LK_ZOMBIE); /* not in queue */
-    if (ctx.status == LK_ERR || ret < 0 || svr->status == LK_STOPPING) {
-        lkT_delserviceG(S, svr);
-        return NULL;
-    }
-
-    lk_lock(svr->lock);
-    if (svr->event == &event) {
-        lk_freeevent(*svr->event);
-        svr->event = NULL;
-    }
-    svr->status = LK_WORKING;
-    lk_unlock(svr->lock);
-
-    lk_lock(S->lock);
-    lk_lock(svr->lock);
-    if (ret == LK_WEAK) svr->weak = 1;
-    else ++S->nservices;
-    if (lkQ_empty(&svr->signals))
-        svr->status = LK_SLEEPING;
-    else
-        lkQ_enqueue(&S->active_services, svr);
-    lk_unlock(svr->lock);
-    lkG_onopen(S, svr);
-    lk_unlock(S->lock);
-
-    return svr;
+    return lkT_callinitGS(S, svr, h);
 }
 
-static void lkT_dispatchGS (lk_State *S, lk_Service *svr) {
+static void lkT_callslotsGS (lk_State *S, lk_Service *svr) {
     lk_Context ctx;
     lk_SignalNode *node;
-    int should_delete;
 
     /* fetch all signal */
     lk_lock(svr->lock);
@@ -1447,17 +1420,14 @@ static void lkT_dispatchGS (lk_State *S, lk_Service *svr) {
         int ret = LK_ERR;
         lk_Slot *slot = node->slot;
         lk_Service *src = node->data.src;
-
         assert(src != NULL);
-        if (src->refactor && slot != S->logger) {
+        if (src->refactor && slot != S->logger)
             lk_try(S, &ctx, ret = src->refactor(S, src->ud, slot, &node->data));
-        }
-        if (ret == LK_ERR && slot->handler) {
+        if (ret == LK_ERR && slot->handler)
             lk_try(S, &ctx, slot->handler(S, slot->ud, slot, &node->data));
-        }
-
         if (node->data.copy)
             lk_free(S, node->data.data);
+
         lk_lock(S->lock);
         lkQ_enqueue(&S->freed_signals, node);
         lk_lock(src->lock);
@@ -1465,13 +1435,15 @@ static void lkT_dispatchGS (lk_State *S, lk_Service *svr) {
             lkQ_enqueue(&S->active_services, svr);
         lk_unlock(src->lock);
         lk_unlock(S->lock);
-
         node = next;
     }
     lk_popcontext(S, &ctx);
+}
 
-    /* cleanup */
-    should_delete = 0;
+static void lkT_dispatchGS (lk_State *S, lk_Service *svr) {
+    int should_delete = 0;
+    lkT_callslotsGS(S, svr);
+
     lk_lock(S->lock);
     lk_lock(svr->lock);
     if (!lkQ_empty(&svr->signals))
@@ -1486,6 +1458,19 @@ static void lkT_dispatchGS (lk_State *S, lk_Service *svr) {
     lk_unlock(S->lock);
 
     if (should_delete) lkT_delserviceG(S, svr);
+}
+
+static int lkT_check(lk_State *S, const char *name) {
+    if (strlen(name) > LK_MAX_NAMESIZE) {
+        lk_log(S, "E[require]" lk_loc("serivce name '%s' too long"), name);
+        return 0;
+    }
+    if (S->status >= LK_STOPPING) {
+        lk_log(S, "E[require]" lk_loc("can not create slot "
+                    "after state destroyed"));
+        return 0;
+    }
+    return 1;
 }
 
 LK_API void lk_preload (lk_State *S, const char *name, lk_ServiceHandler *h) {
@@ -1504,35 +1489,140 @@ LK_API void lk_preload (lk_State *S, const char *name, lk_ServiceHandler *h) {
 
 LK_API lk_Service *lk_requiref (lk_State *S, const char *name, lk_ServiceHandler *h) {
     lk_Service *svr;
+    if (!lkT_check(S, name)) return NULL;
     lk_lock(S->lock);
     svr = lkT_newservice(S, name);
     lk_unlock(S->lock);
-    return lkT_initserviceGS(S, svr, h);
-}
-
-LK_API lk_Service *lk_require (lk_State *S, const char *name) {
-    lk_ServiceHandler *h = NULL;
-    lk_Service *svr = NULL;
-    lk_lock(S->lock);
-    if (svr == NULL) svr = lkT_preload(S, name, &h);
-    if (svr == NULL) svr = lkT_module(S, name, &h);
-    lk_unlock(S->lock);
-    if (svr == NULL || h == NULL) return NULL;
+    if (svr == NULL) {
+        lk_log(S, "E[require]", lk_loc("can not create service '%s'"), name);
+        return NULL;
+    }
     return lkT_initserviceGS(S, svr, h);
 }
 
 LK_API void lk_setdata (lk_State *S, void *data) {
     lk_Service *svr = lk_self(S);
-    if (svr->status == LK_INITIALING)
+    if (svr->status != LK_INITIALING)
+        lk_log(S, "E[setdata]" lk_loc("can not set data "
+                    "after service initialized"));
+    else
         svr->data = data;
 }
 
 LK_API void lk_setrefactor (lk_State *S, lk_SignalHandler *h, void *ud) {
     lk_Service *svr = lk_self(S);
-    if (svr->status == LK_INITIALING) {
+    if (svr->status != LK_INITIALING)
+        lk_log(S, "E[setrefactor]" lk_loc("can not set refactor "
+                    "after service initialized"));
+    else {
         svr->refactor = h;
         svr->ud = ud;
     }
+}
+
+
+/* service module loader */
+
+typedef struct lk_LoaderState {
+    lk_State   *S;
+    lk_Service *svr;
+    lk_ServiceHandler *h;
+    const char *start, *end; /* path */
+    const char *name, *nend; /* module name */
+    lk_Module   module;
+    lk_Buffer   buff;
+    lk_Buffer   errmsg;
+} lk_LoaderState;
+
+static const char *lkT_modpath (lk_LoaderState *ls, const char *start) {
+    lk_Buffer *B = &ls->buff;
+    for (; start < ls->end && *start != ';'; ++start) {
+        if (*start == '?')
+            lk_addlstring(B, ls->name, ls->nend - ls->name);
+        else if (*start == '!')
+            lkP_getmodulename(B);
+        else
+            lk_addchar(B, *start);
+    }
+    if (lk_buffsize(B) != 0)
+        lk_addchar(B, '\0');
+    return start;
+}
+
+static void lkT_preload (lk_State *S, lk_LoaderState *ls, const char *name) {
+    lk_Entry *e = lk_getentry(&S->preload, name);
+    if (e != NULL && e->value != NULL) {
+        ls->h = (lk_ServiceHandler*)(ptrdiff_t)e->value;
+        lk_delentry(&S->slots, e, 1);
+    }
+    if (ls->h == NULL)
+        lk_addfstring(&ls->errmsg, "\tno entry in preload['%s']\n", name);
+}
+
+static size_t lkT_initpath (lk_State *S, lk_LoaderState *ls, const char *name, const char *dot) {
+    lk_Buffer *B = &ls->buff;
+    size_t namelen;
+    lk_resetbuffer(B);
+    lk_addstring(B, LK_PREFIX);
+    lk_addstring(B, name);
+    if (dot) lk_replacebuffer(B, '.', '_');
+    lk_addchar(B, '\0');
+    namelen = lk_buffsize(B);
+    ls->start = lk_buffer(&S->path);
+    ls->end   = ls->start + lk_buffsize(&S->path);
+    ls->name  = name;
+    ls->nend  = name + strlen(name);
+    return namelen;
+}
+
+static void lkT_module (lk_State *S, lk_LoaderState *ls, const char *name) {
+    lk_Buffer *B = &ls->buff;
+    const char *dot = strchr(name, '.');
+    size_t offset = lkT_initpath(S, ls, name, dot);
+    for (; ls->start < ls->end; ++ls->start) {
+        const char *current = ls->start;
+        lk_buffsize(B) = offset;
+        ls->start = lkT_modpath(ls, current);
+        if (lk_buffsize(B) == 0) continue;
+        if ((ls->module = lk_loadlib(lk_buffer(B)+offset)) == NULL) {
+            lk_addfstring(&ls->errmsg, "\tno file '%s'\n", lk_buffer(B)+offset);
+            if (!dot) continue;
+            lk_buffsize(B) = offset;
+            ls->start = lkT_modpath(ls, current);
+            if ((ls->module = lk_loadlib(lk_buffer(B)+offset)) == NULL)
+                lk_addfstring(&ls->errmsg, "\tno file '%s'\n", lk_buffer(B)+offset);
+        }
+        if (ls->module == NULL) continue;
+        ls->h = (lk_ServiceHandler*)lk_getaddr(ls->module, lk_buffer(B));
+        if (ls->h != NULL) return;
+        lk_addfstring(&ls->errmsg, "\tcan not find entry '%s' in file '%s'\n",
+                lk_buffer(B), lk_buffer(B)+offset);
+        lk_freelib(ls->module);
+    }
+}
+
+LK_API lk_Service *lk_require (lk_State *S, const char *name) {
+    lk_LoaderState ls;
+    if (!lkT_check(S, name)) return NULL;
+    memset(&ls, 0, sizeof(ls));
+    lk_initbuffer(S, &ls.buff);
+    lk_initbuffer(S, &ls.errmsg);
+    lk_addfstring(&ls.errmsg, "can not load service '%s':\n", name);
+    lk_lock(S->lock);
+    if (ls.h == NULL) lkT_preload(S, &ls, name);
+    if (ls.h == NULL) lkT_module(S, &ls, name);
+    lk_unlock(S->lock);
+    if (ls.h == NULL)
+        lk_log(S, "E[require]" lk_loc("%s"), lk_buffer(&ls.errmsg));
+    lk_freebuffer(&ls.errmsg);
+    lk_freebuffer(&ls.buff);
+    if (ls.h != NULL && ls.svr == NULL
+            && (ls.svr = lkT_newservice(S, name)) == NULL) {
+        if (ls.module) lk_freelib(ls.module);
+        lk_log(S, "E[require]" lk_loc("can not create service '%s')"), name);
+        return NULL;
+    }
+    return lkT_initserviceGS(S, ls.svr, ls.h);
 }
 
 
@@ -1643,10 +1733,10 @@ LK_API void lk_close (lk_State *S) {
 }
 
 LK_API void lk_setpath (lk_State *S, const char *path) {
-    if (S->status == LK_INITIALING) {
-        lk_addchar(&S->path, ';');
-        lk_addstring(&S->path, path);
-    }
+    lk_lock(S->lock);
+    lk_addchar(&S->path, ';');
+    lk_addstring(&S->path, path);
+    lk_unlock(S->lock);
 }
 
 LK_API int lk_start (lk_State *S) {
