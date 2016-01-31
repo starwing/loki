@@ -284,6 +284,7 @@ typedef HANDLE            lk_Thread;
 #else /* POSIX systems */
 
 #include <unistd.h>
+#include <limits.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/time.h>
@@ -886,6 +887,18 @@ static size_t lkP_getcpucount (void) {
     return (size_t)sysconf(_SC_NPROCESSORS_ONLN);
 }
 
+static void lkP_getmodulename(lk_Buffer *B) {
+    char *buff = lk_prepbuffsize(B, PATH_MAX);
+    size_t size;
+    if ((size = readlink("/proc/self/exe", buff, PATH_MAX)) <= 0)
+        lk_addchar(B, '.');
+    else {
+        while (--size != 0 && buff[size] != '/')
+            ;
+        lk_addsize(B, size);
+    }
+}
+
 static void *lkP_poller (void *ud) {
     lk_Context ctx;
     lk_Slot *slot  = (lk_Slot*)ud;
@@ -1395,7 +1408,7 @@ static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHa
 #else
         lk_lock(svr->lock);
         while (svr->status == LK_INITIALING)
-            pthread_cond_wait(*pevent);
+            pthread_cond_wait(pevent, &svr->lock);
         lk_unlock(svr->lock);
 #endif
         return svr;
@@ -1404,10 +1417,22 @@ static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHa
     return lkT_callinitGS(S, svr, h);
 }
 
+static void lkT_callslot (lk_State *S, lk_SignalNode *node, lk_Context *ctx) {
+    int ret = LK_ERR;
+    lk_Slot *slot = node->slot;
+    lk_Service *src = node->data.src;
+    assert(src != NULL);
+    if (src->refactor && slot != S->logger)
+        lk_try(S, ctx, ret = src->refactor(S, src->ud, slot, &node->data));
+    if (ret == LK_ERR && slot->handler)
+        lk_try(S, ctx, slot->handler(S, slot->ud, slot, &node->data));
+    if (node->data.copy)
+        lk_free(S, node->data.data);
+}
+
 static void lkT_callslotsGS (lk_State *S, lk_Service *svr) {
     lk_Context ctx;
     lk_SignalNode *node;
-
     /* fetch all signal */
     lk_lock(svr->lock);
     lkQ_clear(&svr->signals, node);
@@ -1417,17 +1442,8 @@ static void lkT_callslotsGS (lk_State *S, lk_Service *svr) {
     lk_pushcontext(S, &ctx, svr);
     while (node != NULL) {
         lk_SignalNode *next = node->next;
-        int ret = LK_ERR;
-        lk_Slot *slot = node->slot;
         lk_Service *src = node->data.src;
-        assert(src != NULL);
-        if (src->refactor && slot != S->logger)
-            lk_try(S, &ctx, ret = src->refactor(S, src->ud, slot, &node->data));
-        if (ret == LK_ERR && slot->handler)
-            lk_try(S, &ctx, slot->handler(S, slot->ud, slot, &node->data));
-        if (node->data.copy)
-            lk_free(S, node->data.data);
-
+        lkT_callslot(S, node, &ctx);
         lk_lock(S->lock);
         lkQ_enqueue(&S->freed_signals, node);
         lk_lock(src->lock);
