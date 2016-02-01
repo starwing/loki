@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <time.h>
+#else
+#include <sys/time.h>
+#endif
 
 #define LK_DEFAULT_LEN  64
 #define LK_KEY_LEN		64
