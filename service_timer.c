@@ -238,6 +238,15 @@ static int lkT_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
         if (lk_wait(slot, NULL, waittime) == LK_ERR)
             break;
     }
+    lkT_cleartimers(ts);
+    lk_freelock(ts->lock);
+    lk_free(S, ts->heap);
+    while (ts->freed != NULL) {
+        lk_Timer *next = ts->freed->u.next;
+        lk_free(S, ts->freed);
+        ts->freed = next;
+    }
+    lk_free(S, ts);
     return LK_OK;
 }
 
@@ -261,35 +270,16 @@ static int lkT_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
-static int lkT_deletor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = (lk_TimerState*)ud;
-    (void)slot;
-    if (sig == NULL) {
-        lkT_cleartimers(ts);
-        lk_freelock(ts->lock);
-        lk_free(S, ts->heap);
-        while (ts->freed != NULL) {
-            lk_Timer *next = ts->freed->u.next;
-            lk_free(S, ts->freed);
-            ts->freed = next;
-        }
-        lk_free(S, ts);
-    }
-    return LK_OK;
-}
-
 LKMOD_API int loki_service_timer(lk_State *S) {
     lk_TimerState *ts = lkT_newstate(S);
-    lk_Service *svr = lk_self(S);
     lk_setdata(S, ts);
     ts->poll = lk_newpoll(S, "poll", lkT_poller, ts);
-    lk_setslothandler((lk_Slot*)svr, lkT_deletor, ts);
     lk_setrefactor(S, lkT_refactor, (void*)ts);
     return LK_WEAK;
 }
 
-/* win32cc: flags+='-Wextra -s -O3 -mdll -DLOKI_IMPLEMENTATION -std=c90 -pedantic'
- * win32cc: output='loki.dll'
- * unixcc: flags+='-Wextra -s -O3 -fPIC -shared -DLOKI_IMPLEMENTATION'
- * unixcc: output='loki.so' */
+/* win32cc: flags+='-Wextra -s -O3 -mdll -std=c89 -pedantic' libs+='-lws2_32'
+ * win32cc: input='lokilib.c service_*.c' output='loki.dll'
+ * unixcc: flags+='-Wextra -s -O3 -fPIC -shared' libs+='-pthread -ldl'
+ * unixcc: input='lokilib.c service_*.c' output='loki.so' */
 

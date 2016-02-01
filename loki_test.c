@@ -5,8 +5,6 @@ static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
     printf("msg: %s\n", (char*)sig->data);
 	
-    lk_Service *log_svr = lk_require(S, "log");
-
     ret = *sig;
     sig->copy = 0;
     lk_emit((lk_Slot*)sig->src, &ret);
@@ -66,5 +64,5 @@ int main(void) {
     return 0;
 }
 
-/* unixcc: input+='service_timer.c service_log.c' libs+='-pthread -ldl -lrt' */
-/* win32cc: input+='service_timer.c service_log.c' */
+/* unixcc: input+='service_*.c' libs+='-pthread -ldl -lrt' */
+/* win32cc: input+='service_*.c' libs+='-lws2_32' */
