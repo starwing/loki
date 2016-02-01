@@ -5,8 +5,7 @@ static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
     printf("msg: %s\n", (char*)sig->data);
 	
-    lk_Service *log_svr = lk_require(S, "log");
-    LK_DEBUGLOG(log_svr, "get msg:[%s]", (char*)sig->data);
+    lk_log(S, "V[echo]" lk_loc("get msg:[%s]"), (char*)sig->data);
 
     ret = *sig;
     sig->copy = 0;
@@ -52,8 +51,9 @@ static int loki_service_echo(lk_State *S) {
 }
 
 int main(void) {
-    lk_State *S = lk_newstate();
+    lk_State *S = lk_newstate(NULL);
     lk_openlibs(S);
+	lk_require(S, "log");
     lk_setslothandler((lk_Slot*)S, resp, NULL);
 
     lk_requiref(S, "echo", loki_service_echo);
