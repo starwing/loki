@@ -89,26 +89,6 @@ typedef struct lk_LogState {
 	lk_Table dump;
 } lk_LogState;
 
-LK_API int lk_logemit(lk_Service* svr, const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-
-    lk_LogState *ls = (lk_LogState *)lk_data(svr);
-    lk_Buffer log_buff;
-    lk_initbuffer(ls->S, &log_buff);
-    lk_addvfstring(&log_buff, fmt, ap);
-
-    lk_Signal log_sig = {NULL};
-    log_sig.copy = 1;
-    log_sig.size = lk_buffsize(&log_buff);
-    log_sig.data = lk_buffer(&log_buff);
-    lk_emit((lk_Slot*)svr, &log_sig);
-    lk_freebuffer(&log_buff);
-
-    va_end(ap);
-    return 0;
-}
-
 static int lkL_openfile(lk_LogState *ls, lk_LogDump* dump, const char* name) {
     struct tm tm;
     time_t now = time(0);
@@ -284,7 +264,7 @@ static int lkL_writelog(lk_LogState *ls, const char* service_name, char* log_msg
     lk_LogConfig* config = lkL_setconfig(ls, key);
     if (config && config->screen == 1) {
 #ifdef _WIN32
-        fprintf(stdout, "%s", lk_buffer(&log_buff));
+		fwrite(lk_buffer(&log_buff), 1, lk_buffsize(&log_buff), stdout);
 #else
         fprintf(stdout, "%s%s%s", log_color[loglv], 
             lk_buffer(&log_buff), color_end);
@@ -334,8 +314,8 @@ static int lkL_freelog(lk_LogState* ls) {
         void *value = ls->dump.hash[i].value;
         if (value != NULL) lk_free(ls->S, value);
     }
-    lk_freetable(&ls->config);
-    lk_freetable(&ls->dump);
+    lk_freetable(&ls->config, 0);
+    lk_freetable(&ls->dump, 0);
     return 0;
 }
 

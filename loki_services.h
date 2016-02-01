@@ -39,13 +39,6 @@ LK_API void lk_canceltimer (lk_Timer *timer);
 
 LKMOD_API int loki_service_log(lk_State *S);
 
-LK_API int lk_logemit(lk_Service* svr, const char* fmt, ...);
-
-#define LK_DEBUGLOG(svr, fmt, args...) \
-	lk_logemit(svr, "D[%s][%d]%s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args)
-#define LK_ERRORLOG(svr, fmt, args...) \
-	lk_logemit(svr, "E[%s][%d]%s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args)
-
 
 /* socket service */
 
