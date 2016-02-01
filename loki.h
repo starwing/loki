@@ -824,6 +824,11 @@ static void lkP_getmodulename(lk_Buffer *B) {
     }
 }
 
+static lk_Service *lkP_waitinit (lk_Service *svr, lk_Event *event) {
+    WaitForSingleObject(*event, INFINITE);
+    return svr;
+}
+
 static DWORD WINAPI lkP_poller (void *lpParameter) {
     lk_Context ctx;
     lk_Slot *slot  = (lk_Slot*)lpParameter;
@@ -899,6 +904,14 @@ static void lkP_getmodulename(lk_Buffer *B) {
     }
 }
 
+static lk_Service *lkP_waitinit (lk_Service *svr, lk_Event *event) {
+     lk_lock(svr->lock);
+     while (svr->status == LK_INITIALING)
+         pthread_cond_wait(event, &svr->lock);
+     lk_unlock(svr->lock);
+     return svr;
+}
+
 static void *lkP_poller (void *ud) {
     lk_Context ctx;
     lk_Slot *slot  = (lk_Slot*)ud;
@@ -944,6 +957,21 @@ LK_API void lk_waitclose (lk_State *S) {
     S->nthreads = 0;
 }
 
+static int lk_timedwait (lk_Event *event, lk_Lock *lock, int waitms) {
+    struct timeval tv;
+    struct timespec ts;
+    int sec  = waitms / 1000;
+    int usec = waitms % 1000 * 1000;
+    gettimeofday(&tv, NULL);
+    if (tv.tv_usec + usec > 1000000) {
+        sec += 1;
+        usec = (tv.tv_usec + usec) - 1000000;
+    }
+    ts.tv_sec = tv.tv_sec + sec;
+    ts.tv_nsec = (tv.tv_usec + usec) * 1000;
+    return pthread_cond_timedwait(event, lock, &ts);
+}
+
 LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
     lk_Poll *poll = (lk_Poll*)slot;
     lk_SignalNode *node;
@@ -955,21 +983,8 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
     if (waitms != 0 && (!node || status != LK_STOPPING)) {
         if (waitms < 0)
             pthread_cond_wait(&poll->event, &poll->lock);
-        else {
-            struct timeval tv;
-            struct timespec ts;
-            int sec  = waitms / 1000;
-            int usec = waitms % 1000 * 1000;
-            gettimeofday(&tv, NULL);
-            if (tv.tv_usec + usec > 1000000) {
-                sec += 1;
-                usec = (tv.tv_usec + usec) - 1000000;
-            }
-            ts.tv_sec = tv.tv_sec + sec;
-            ts.tv_nsec = (tv.tv_usec + usec) * 1000;
-            pthread_cond_timedwait(&poll->event, &poll->lock, &ts);
-            gettimeofday(&tv, NULL);
-        }
+        else
+            lk_timedwait(&poll->event, &poll->lock, waitms);
     }
     lk_unlock(poll->lock);
     if (node) {
@@ -1146,8 +1161,7 @@ LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_SignalHandler *h, 
     poll->slot.service = svr;
     poll->slot.handler = h;
     poll->slot.ud = ud;
-    if (lkP_startpoll(poll) != LK_OK)
-        return NULL;
+    if (lkP_startpoll(poll) != LK_OK) return NULL;
     lk_lock(S->lock);
     if ((poll = (lk_Poll*)lkS_register(S, &poll->slot)) != NULL) {
         poll->slot.next = svr->polls;
@@ -1261,8 +1275,9 @@ LK_API void lk_setslothandler (lk_Slot *slot, lk_SignalHandler *h, void *ud) {
 
 /* service routines */
 
-static void lkG_onopen  (lk_State *S, lk_Service *svr);
-static void lkG_onclose (lk_State *S, lk_Service *svr);
+static void lkG_onrequire (lk_State *S, lk_Service *svr);
+static void lkG_onopen    (lk_State *S, lk_Service *svr);
+static void lkG_onclose   (lk_State *S, lk_Service *svr);
 
 LK_API void *lk_data (lk_Service *svr) { return svr->data; }
 
@@ -1351,30 +1366,27 @@ static void lkT_delserviceG (lk_State *S, lk_Service *svr) {
 static lk_Service *lkT_callinitGS (lk_State *S, lk_Service *svr, lk_ServiceHandler *h) {
     lk_Context ctx;
     int ret = LK_OK;
-
     lk_pushcontext(S, &ctx, svr);
     lk_try(S, &ctx, ret = h(S));
     lk_popcontext(S, &ctx);
-
-    assert(svr->status != LK_ZOMBIE); /* not in queue */
-    if (ctx.status == LK_ERR || ret < 0 || svr->status == LK_STOPPING) {
+    if (ctx.status == LK_ERR || ret < 0 || svr->status >= LK_STOPPING) {
         lkT_delserviceG(S, svr);
         return NULL;
     }
-
     lk_lock(S->lock);
     lk_lock(svr->lock);
-    if (ret == LK_WEAK) svr->weak = 1;
-    else ++S->nservices;
     if (svr->event) {
         lk_freeevent(*svr->event);
         svr->event = NULL;
     }
-    svr->status = LK_WORKING;
+    if (ret == LK_WEAK) svr->weak = 1;
+    else ++S->nservices;
     if (lkQ_empty(&svr->signals))
         svr->status = LK_SLEEPING;
-    else
+    else {
+        svr->status = LK_WORKING;
         lkQ_enqueue(&S->active_services, svr);
+    }
     lk_unlock(svr->lock);
     lkG_onopen(S, svr);
     lk_unlock(S->lock);
@@ -1384,7 +1396,6 @@ static lk_Service *lkT_callinitGS (lk_State *S, lk_Service *svr, lk_ServiceHandl
 static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHandler *h) {
     lk_Event event, *pevent;
     int need_initialize, skip_initialize = 0;
-
     if (!svr) return NULL;
     lk_lock(svr->lock);
     pevent = svr->event;
@@ -1396,24 +1407,11 @@ static lk_Service *lkT_initserviceGS (lk_State *S, lk_Service *svr, lk_ServiceHa
             svr->event = &event;
     }
     lk_unlock(svr->lock);
-
     if (skip_initialize)
         return NULL;
     else if (!need_initialize && pevent == NULL)
         return svr;
-
-    if (pevent) {
-#ifdef _WIN32
-        WaitForSingleObject(*pevent, INFINITE);
-#else
-        lk_lock(svr->lock);
-        while (svr->status == LK_INITIALING)
-            pthread_cond_wait(pevent, &svr->lock);
-        lk_unlock(svr->lock);
-#endif
-        return svr;
-    }
-
+    if (pevent) return lkP_waitinit(svr, pevent);
     return lkT_callinitGS(S, svr, h);
 }
 
@@ -1505,6 +1503,10 @@ LK_API void lk_preload (lk_State *S, const char *name, lk_ServiceHandler *h) {
 
 LK_API lk_Service *lk_requiref (lk_State *S, const char *name, lk_ServiceHandler *h) {
     lk_Service *svr;
+    if ((svr = (lk_Service*)lk_slot(S, name)) != NULL) {
+        lkG_onrequire(S, svr);
+        return svr;
+    }
     if (!lkT_check(S, name)) return NULL;
     lk_lock(S->lock);
     svr = lkT_newservice(S, name);
@@ -1619,6 +1621,10 @@ static void lkT_module (lk_State *S, lk_LoaderState *ls, const char *name) {
 
 LK_API lk_Service *lk_require (lk_State *S, const char *name) {
     lk_LoaderState ls;
+    if ((ls.svr = (lk_Service*)lk_slot(S, name)) != NULL) {
+        lkG_onrequire(S, ls.svr);
+        return ls.svr;
+    }
     if (!lkT_check(S, name)) return NULL;
     memset(&ls, 0, sizeof(ls));
     lk_initbuffer(S, &ls.buff);
@@ -1669,11 +1675,19 @@ static void lkG_delstate (lk_State *S) {
     free(S);
 }
 
-static void lkG_onopen (lk_State *S, lk_Service *svr) {
+static void lkG_onrequire (lk_State *S, lk_Service *svr) {
     if (S->monitor) {
         lk_Service *svrs[2];
         svrs[0] = lk_self(S), svrs[1] = svr;
         lk_emitdata(S->monitor, 0, 0, svrs, sizeof(*svrs));
+    }
+}
+
+static void lkG_onopen (lk_State *S, lk_Service *svr) {
+    if (S->monitor) {
+        lk_Service *svrs[2];
+        svrs[0] = lk_self(S), svrs[1] = svr;
+        lk_emitdata(S->monitor, 0, 1, svrs, sizeof(*svrs));
     }
     if (!S->logger && strcmp(svr->slot.name, "log") == 0)
         S->logger = &svr->slot;
