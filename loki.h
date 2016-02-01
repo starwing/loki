@@ -561,6 +561,19 @@ LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
 
 /* buffer routines */
 
+#ifdef _WIN32
+static int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap) {
+    int count = -1;
+    if (size != 0)
+        count = _vsnprintf_s(outBuf, size, _TRUNCATE, format, ap);
+    if (count == -1)
+        count = _vscprintf(format, ap);
+    return count;
+}
+#else
+# define c99_vsnprintf vsnprintf
+#endif
+
 LK_API void lk_initbuffer (lk_State *S, lk_Buffer *B) {
     B->size = 0;
     B->capacity = LK_BUFFERSIZE;
@@ -601,19 +614,19 @@ LK_API int lk_addlstring (lk_Buffer *B, const char *s, size_t len) {
 LK_API int lk_addvfstring (lk_Buffer *B, const char *fmt, va_list l) {
     const size_t init_size = 80;
     char *ptr = lk_prepbuffsize(B, init_size+1);
-    size_t len;
     va_list l_count;
+    int len;
 #ifdef va_copy
     va_copy(l_count, l);
 #else
     __va_copy(l_count, l);
 #endif
-    len = vsnprintf(ptr, init_size, fmt, l_count);
+    len = c99_vsnprintf(ptr, init_size, fmt, l_count);
     va_end(l_count);
     if (len <= 0) return 0;
-    if (len > init_size) {
+    if ((size_t)len > init_size) {
         ptr = lk_prepbuffsize(B, len + 1);
-        vsnprintf(ptr, len+1, fmt, l);
+        c99_vsnprintf(ptr, len+1, fmt, l);
     }
     return B->size += len;
 }
