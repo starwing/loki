@@ -4,6 +4,9 @@
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
     printf("msg: %s\n", (char*)sig->data);
+	
+    lk_Service *log_svr = lk_require(S, "log");
+
     ret = *sig;
     sig->copy = 0;
     lk_emit((lk_Slot*)sig->src, &ret);
@@ -43,22 +46,19 @@ static int loki_service_echo(lk_State *S) {
     lk_newslot(S, "echo", echo, NULL);
     t = lk_newtimer(svr, repeater, (void*)pi);
     lk_starttimer(t, 1000);
+
     return LK_OK;
 }
 
 int main(void) {
-    lk_State *S = lk_newstate();
+    lk_State *S = lk_newstate(NULL);
     lk_openlibs(S);
     lk_setslothandler((lk_Slot*)S, resp, NULL);
 
     lk_requiref(S, "echo", loki_service_echo);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");
-    lk_Signal sig = LK_SIGNAL;
-    sig.copy = 1;
-    sig.size = 13;
-    sig.data = lk_strdup(S, "hello world!");
-    lk_emit(slot, &sig);
+    lk_emitstring(slot, 0, 0, "Hello World!");
 
     printf("thread count: %d\n", lk_start(S));
     lk_waitclose(S);
@@ -66,5 +66,5 @@ int main(void) {
     return 0;
 }
 
-/* unixcc: input+='service_timer.c' libs+='-pthread -ldl' */
-/* win32cc: input+='service_timer.c' */
+/* unixcc: input+='service_timer.c service_log.c' libs+='-pthread -ldl -lrt' */
+/* win32cc: input+='service_timer.c service_log.c' */

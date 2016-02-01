@@ -107,6 +107,7 @@ struct lk_Tcp {
     lk_Service *service;
     lk_RecvHandlers *handlers;
     zn_Tcp *tcp;
+    void *data;
     zn_SendBuffer send;
     zn_RecvBuffer recv;
     zn_PeerInfo info;
@@ -437,7 +438,7 @@ static void lkL_poster (void *ud, zn_State *S) {
     case LK_CMD_TCP_SEND: {
         lk_Tcp *tcp = cmd->u.tcp;
         int ret = ZN_OK;
-        if (tcp->tcp && zn_sendprepare(&tcp->send, cmd->data, cmd->size))
+        if (tcp->tcp && zn_sendprepare(&tcp->send, (char*)cmd->data, cmd->size))
             ret = zn_send(tcp->tcp, zn_sendbuff(&tcp->send), zn_sendsize(&tcp->send),
                         lkL_onsend, tcp);
         lk_free(zs->S, cmd->data);
@@ -474,7 +475,7 @@ static void lkL_poster (void *ud, zn_State *S) {
     } break;
     case LK_CMD_UDP_SENDTO: {
         lk_Udp *udp = cmd->u.udp;
-        int ret = zn_sendto(udp->udp, cmd->data, cmd->size,
+        int ret = zn_sendto(udp->udp, (char*)cmd->data, cmd->size,
                   cmd->info.addr, cmd->info.port);
         lk_free(zs->S, cmd->data);
         if (ret != ZN_OK) {
@@ -556,12 +557,6 @@ static int lkL_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
 
 
 /* interfaces */
-
-LK_API unsigned lk_getsession(lk_Tcp *tcp)
-{ return tcp->session; }
-
-LK_API void lk_setsession(lk_Tcp *tcp, unsigned session)
-{ tcp->session = session; } 
 
 LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud) {
     lk_ZNetState *zs = lkL_getstate(svr);
@@ -647,6 +642,23 @@ LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port, lk_Tcp
     lkL_post(cmd);
 }
 
+LK_API void *lk_gettcpdata(lk_Tcp *tcp) {
+    lk_ZNetState *zs = tcp->zs;
+    void *data;
+    lk_lock(zs->lock);
+    data = tcp->data;
+    lk_unlock(zs->lock);
+    return data;
+}
+
+LK_API void lk_settcpdata(lk_Tcp *tcp, void *data) {
+    lk_ZNetState *zs = tcp->zs;
+    lk_lock(zs->lock);
+    tcp->data = data;
+    lk_unlock(zs->lock);
+}
+
+
 LK_API void lk_deltcp (lk_Tcp *tcp) {
     lk_ZNetState *zs = tcp->zs;
     lkL_getobject(cmd, lk_PostCmd);
@@ -706,7 +718,7 @@ LKMOD_API int loki_service_socket (lk_State *S) {
 }
 
 /* win32cc: flags+='-s -O3 -mdll'
- * win32cc: input+='lokilib.c service_timer.c' output='loki.dll' libs+='-lws2_32'
+ * win32cc: input='lokilib.c service_*.c' output='loki.dll' libs+='-lws2_32'
  * unixcc: flags+='-Wextra -s -O3 -fPIC -shared -DLOKI_IMPLEMENTATION'
  * unixcc: output='loki.so' */
 

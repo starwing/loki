@@ -1133,7 +1133,7 @@ LK_API lk_Slot *lk_newslot (lk_State *S, const char *name, lk_SignalHandler *h, 
     lk_Buffer B;
     if (!lkS_check(S, "newslot", name)) return NULL;
     name = lkS_name(svr, &B, name);
-    slot = lkS_new(S, sizeof(lk_Slot*), lk_buffer(&B));
+    slot = lkS_new(S, sizeof(lk_Slot), lk_buffer(&B));
     lk_freebuffer(&B);
     slot->service = svr;
     slot->handler = h;
