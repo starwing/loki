@@ -164,9 +164,9 @@ static void lkL_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
 }
 
 static int lkL_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_ZNetState *zs = (lk_ZNetState*)ud;
+    zn_State *zs = ((lk_ZNetState*)ud)->zs;
     (void)S; (void)slot; (void)sig;
-    zn_run(zs->zs, ZN_RUN_LOOP);
+    zn_run(zs, ZN_RUN_LOOP);
     return LK_OK;
 }
 
@@ -186,6 +186,7 @@ static void lkL_postdeletor (void *ud, zn_State *S) {
             zs->freed[i] = next;
         }
     }
+    lk_free(zs->S, zs);
 }
 
 static int lkL_deletor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
@@ -389,10 +390,11 @@ static void lkL_poster (void *ud, zn_State *S) {
         if (tcp->tcp) {
             if (zn_bufflen(tcp->send.sending) || zn_bufflen(tcp->send.pending))
                 tcp->closing = 1;
-            else
+            else {
                 zn_deltcp(tcp->tcp);
+                lkL_putobject(tcp);
+            }
         }
-        lkL_putobject(tcp);
     } break;
     case LK_CMD_UDP_DELETE: {
         lk_Udp *udp = cmd->u.udp;

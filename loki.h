@@ -561,7 +561,7 @@ LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
 
 /* buffer routines */
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__MINGW32__)
 static int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap) {
     int count = -1;
     if (size != 0)
