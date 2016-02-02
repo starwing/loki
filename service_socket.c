@@ -39,6 +39,7 @@ typedef struct lk_ZNetState {
     lk_Slot *poll;
     lk_State *S;
     zn_State *zs;
+    volatile unsigned closing;
     lk_Table handlers;
     lk_NetObject *freed[LK_TYPE_COUNT];
     lk_Lock lock; /* lock of freed */
@@ -74,8 +75,9 @@ typedef struct lk_PostCmd {
         lk_Udp *udp;
     } u;
     union {
-        lk_TcpHandler *on_tcp;
-        lk_UdpHandler *on_udp;
+        lk_AcceptHandler *on_accept;
+        lk_ConnectHandler *on_connect;
+        lk_UdpBindHandler *on_udpbind;
     } h;
     void  *data;
     size_t size;
@@ -96,7 +98,7 @@ struct lk_Accept {
     lk_NetObject o;
     lk_ZNetState *zs;
     lk_Service *service;
-    lk_TcpHandler *handler; void *ud;
+    lk_AcceptHandler *handler; void *ud;
     zn_Accept *accept;
     lk_Tcp *tcp;
 };
@@ -164,9 +166,11 @@ static void lkL_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
 }
 
 static int lkL_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    zn_State *zs = ((lk_ZNetState*)ud)->zs;
-    (void)S; (void)slot; (void)sig;
-    zn_run(zs, ZN_RUN_LOOP);
+    lk_ZNetState *zs = (lk_ZNetState*)ud;
+    (void)slot; (void)sig;
+    while (!zs->closing)
+        zn_run(zs->zs, ZN_RUN_LOOP);
+    lk_free(S, zs);
     return LK_OK;
 }
 
@@ -174,6 +178,7 @@ static void lkL_postdeletor (void *ud, zn_State *S) {
     lk_ZNetState *zs = (lk_ZNetState*)ud;
     int i; lk_Entry *e = NULL;
     (void)S;
+    zs->closing = 1;
     zn_close(zs->zs);
     zn_deinitialize();
     while (lk_nextentry(&zs->handlers, &e))
@@ -186,7 +191,6 @@ static void lkL_postdeletor (void *ud, zn_State *S) {
             zs->freed[i] = next;
         }
     }
-    lk_free(zs->S, zs);
 }
 
 static int lkL_deletor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
@@ -295,7 +299,7 @@ static void lkL_onaccept (void *ud, zn_Accept *zaccept, unsigned err, zn_Tcp *zt
             (err = zn_accept(zaccept, lkL_onaccept, accept)) != ZN_OK) {
         lk_log(zs->S, "E[accept]" lk_loc("%s"), zn_strerror(err));
         zn_delaccept(zaccept);
-        lkL_accepterror(accept, err);
+        accept->accept = NULL;
     }
     lk_emit((lk_Slot*)accept->service, &sig);
 }
@@ -515,19 +519,34 @@ static int lkL_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     case LK_SIGTYPE_ACCEPT_LISTEN: {
         lk_Accept *accept = (lk_Accept*)sig->data;
         if (accept->handler)
-            accept->handler(S, accept->ud, sig->session, accept->tcp);
+            accept->handler(S, accept->ud, sig->session, accept, accept->tcp);
+        else if (sig->session != ZN_OK) {
+            lk_Tcp *tcp = accept->tcp;
+            if (tcp) lkL_putobject(tcp);
+            lkL_putobject(accept);
+        }
     } break;
 
     case LK_SIGTYPE_TCP_CONNECT: {
         lk_PostCmd *cmd = (lk_PostCmd*)sig->data;
-        if (cmd->h.on_tcp)
-            cmd->h.on_tcp(S, cmd->data, sig->session, cmd->u.tcp);
+        if (cmd->h.on_connect)
+            cmd->h.on_connect(S, cmd->data, sig->session, cmd->u.tcp);
+        else {
+            lk_Tcp *tcp = cmd->u.tcp;
+            lkL_putobject(tcp);
+        }
         lkL_putobject(cmd);
     } break;
 
     case LK_SIGTYPE_TCP_RECV: {
         lk_Tcp *tcp = (lk_Tcp*)sig->data;
-        if (zn_recvfinish(&tcp->recv, sig->size)) {
+        if (sig->session != ZN_OK) {
+            lk_RecvHandlers *h = tcp->handlers;
+            if (h && h->on_header)
+                h->on_header(S, h->ud_header, tcp, NULL, 0);
+            lkL_putobject(tcp);
+        }
+        else if (zn_recvfinish(&tcp->recv, sig->size)) {
             lkL_getobject(cmd, lk_PostCmd);
             cmd->cmd = LK_CMD_TCP_RECV;
             cmd->u.tcp = tcp;
@@ -537,8 +556,8 @@ static int lkL_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
 
     case LK_SIGTYPE_UDP_BIND: {
         lk_PostCmd *cmd = (lk_PostCmd*)sig->data;
-        if (cmd->h.on_udp)
-            cmd->h.on_udp(S, cmd->data, sig->session, cmd->u.udp);
+        if (cmd->h.on_udpbind)
+            cmd->h.on_udpbind(S, cmd->data, sig->session, cmd->u.udp);
         lkL_putobject(cmd);
     } break;
 
@@ -608,7 +627,7 @@ LK_API void lk_setonudpmsg (lk_Service *svr, lk_RecvFromHandler *h, void *ud) {
     lk_unlock(zs->lock);
 }
 
-LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_TcpHandler *h, void *ud) {
+LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_AcceptHandler *h, void *ud) {
     lk_ZNetState *zs = lkL_getstate(svr);
     lkL_getobject(accept, lk_Accept);
     accept->service = lk_self(zs->S);
@@ -634,11 +653,11 @@ LK_API void lk_listen (lk_Accept *accept, const char *addr, unsigned port) {
     lkL_post(cmd);
 }
 
-LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port, lk_TcpHandler *h, void *ud) {
+LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port, lk_ConnectHandler *h, void *ud) {
     lk_ZNetState *zs = lkL_getstate(svr);
     lkL_getobject(cmd, lk_PostCmd);
     cmd->cmd = LK_CMD_TCP_CONNECT;
-    cmd->h.on_tcp = h;
+    cmd->h.on_connect = h;
     cmd->data = ud;
     lkL_copyinfo(cmd, addr, port);
     lkL_post(cmd);
@@ -678,11 +697,11 @@ LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size) {
     lkL_post(cmd);
 }
 
-LK_API void lk_bindudp (lk_Service *svr, const char *addr, unsigned port, lk_UdpHandler *h, void *ud) {
+LK_API void lk_bindudp (lk_Service *svr, const char *addr, unsigned port, lk_UdpBindHandler *h, void *ud) {
     lk_ZNetState *zs = lkL_getstate(svr);
     lkL_getobject(cmd, lk_PostCmd);
     cmd->cmd = LK_CMD_UDP_BIND;
-    cmd->h.on_udp = h;
+    cmd->h.on_udpbind = h;
     cmd->data = ud;
     lkL_copyinfo(cmd, addr, port);
     lkL_post(cmd);

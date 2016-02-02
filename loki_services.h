@@ -51,8 +51,9 @@ typedef struct lk_Accept lk_Accept;
 typedef struct lk_Tcp    lk_Tcp;
 typedef struct lk_Udp    lk_Udp;
 
-typedef void lk_TcpHandler (lk_State *S, void *ud, unsigned err, lk_Tcp *tcp);
-typedef void lk_UdpHandler (lk_State *S, void *ud, unsigned err, lk_Udp *udp);
+typedef void lk_AcceptHandler (lk_State *S, void *ud, unsigned err, lk_Accept *accept, lk_Tcp *tcp);
+typedef void lk_ConnectHandler (lk_State *S, void *ud, unsigned err, lk_Tcp *tcp);
+typedef void lk_UdpBindHandler (lk_State *S, void *ud, unsigned err, lk_Udp *udp);
 
 typedef size_t lk_HeaderHandler   (lk_State *S, void *ud, lk_Tcp *tcp, const char *buff, size_t len);
 typedef void   lk_PacketHandler   (lk_State *S, void *ud, lk_Tcp *tcp, const char *buff, size_t len);
@@ -64,13 +65,13 @@ LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud);
 LK_API void lk_setonpacket (lk_Service *svr, lk_PacketHandler *h, void *ud);
 LK_API void lk_setonudpmsg (lk_Service *svr, lk_RecvFromHandler *h, void *ud);
 
-LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_TcpHandler *h, void *ud);
+LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_AcceptHandler *h, void *ud);
 LK_API void       lk_delaccept (lk_Accept *accept);
 
 LK_API void lk_listen (lk_Accept *accept, const char *addr, unsigned port);
 
 LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port,
-                        lk_TcpHandler *h, void *ud);
+                        lk_ConnectHandler *h, void *ud);
 LK_API void lk_deltcp  (lk_Tcp *tcp);
 
 LK_API void *lk_gettcpdata (lk_Tcp *tcp);
@@ -79,7 +80,7 @@ LK_API void  lk_settcpdata (lk_Tcp *tcp, void *data);
 LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size);
 
 LK_API void lk_bindudp (lk_Service *svr, const char *addr, unsigned port,
-                        lk_UdpHandler *h, void *ud);
+                        lk_UdpBindHandler *h, void *ud);
 LK_API void lk_deludp  (lk_Udp *udp);
 
 LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,

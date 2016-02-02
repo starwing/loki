@@ -511,13 +511,13 @@ struct lk_State {
     lk_Lock   lock;
     lk_Event  event;
     lk_Thread threads[LK_MAX_THREADS];
+#ifdef LK_DEBUG_MEM
+    unsigned  totalmem;
+#endif
 };
 
 
 /* memory management */
-
-LK_API void lk_free (lk_State *S, void *ptr)
-{ (void)S; free(ptr); }
 
 static int lkM_outofmemory (lk_State *S) {
     (void)S;
@@ -527,15 +527,53 @@ static int lkM_outofmemory (lk_State *S) {
 }
 
 LK_API void *lk_malloc (lk_State *S, size_t size) {
+#ifdef LK_DEBUG_MEM
+    void *ptr = malloc(size + 8);
+    if (ptr == NULL) lkM_outofmemory(S);
+    *(size_t*)ptr = size;
+    lk_lock(S->lock);
+    S->totalmem += size;
+    lk_unlock(S->lock);
+    return (char*)ptr + 8;
+#else
     void *ptr = malloc(size);
     if (ptr == NULL) lkM_outofmemory(S);
     return ptr;
+#endif
 }
 
 LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size) {
+#ifdef LK_DEBUG_MEM
+    size_t oldsize = 0;
+    void *newptr = realloc(ptr == NULL ? NULL : (char*)ptr-8, size + 8);
+    if (newptr == NULL) lkM_outofmemory(S);
+    if (ptr) oldsize = *(size_t*)newptr;
+    *(size_t*)newptr = size;
+    lk_lock(S->lock);
+    S->totalmem += size;
+    S->totalmem -= oldsize;
+    lk_unlock(S->lock);
+    return (char*)newptr + 8;
+#else
     void *newptr = realloc(ptr, size);
     if (newptr == NULL) lkM_outofmemory(S);
     return newptr;
+#endif
+}
+
+LK_API void lk_free (lk_State *S, void *ptr) {
+#ifdef LK_DEBUG_MEM
+    void *rptr = (char*)ptr - 8;
+    size_t size;
+    if (ptr == NULL) return;
+    size = *(size_t*)rptr;
+    free(rptr);
+    lk_lock(S->lock);
+    S->totalmem -= size;
+    lk_unlock(S->lock);
+#else
+    (void)S; free(ptr);
+#endif
 }
 
 LK_API char *lk_strdup (lk_State *S, const char *s) {
@@ -1682,6 +1720,9 @@ static void lkG_delstate (lk_State *S) {
     lk_freeevent(S->event);
     lk_freetls(S->tls_index);
     lk_freelock(S->lock);
+#ifdef LK_DEBUG_MEM
+    assert(S->totalmem == 0);
+#endif
     free(S);
 }
 
