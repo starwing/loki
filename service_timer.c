@@ -194,6 +194,9 @@ LK_API void lk_canceltimer(lk_Timer *timer) {
 }
 
 static void lkT_cleartimers(lk_TimerState *ts) {
+    size_t i;
+    for (i = 0; i < ts->heap_used; ++i)
+        lk_free(ts->S, ts->heap[i]);
     lk_free(ts->S, ts->heap);
     memset(ts, 0, sizeof(lk_TimerState));
     ts->nexttime = LK_FOREVER;

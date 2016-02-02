@@ -1,31 +1,26 @@
+#define LK_DEBUG_MEM
 #define LOKI_IMPLEMENTATION
 #include "loki_services.h"
 
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_Signal ret;
+    lk_Signal ret = *sig;
     printf("msg: %s\n", (char*)sig->data);
-	
-    ret = *sig;
-    sig->copy = 0;
+    sig->free = 0;
     lk_emit((lk_Slot*)sig->src, &ret);
     return LK_OK;
 }
 
 static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed) {
     lk_Slot *echo = lk_slot(S, "echo.echo");
-    lk_Signal ret = LK_SIGNAL;
     int *pi = (int*)ud;
-    ret.copy = 1;
-    ret.size = 13;
     if ((*pi)++ == 10) {
         lk_free(S, pi);
         lk_close(S);
         return 0;
     }
     printf("timer: %d: %u\n", *pi, elapsed);
-    ret.data = lk_strdup(S, "hello world!");
-    lk_emit(echo, &ret);
-    return 1000;
+    lk_emitstring(echo, 0, 0, "Hello world!");
+    return 1;
 }
 
 static int resp(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {

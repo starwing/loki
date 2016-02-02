@@ -148,6 +148,7 @@ LK_API void *lk_malloc  (lk_State *S, size_t size);
 LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
 LK_API void  lk_free    (lk_State *S, void *ptr);
 LK_API char *lk_strdup  (lk_State *S, const char *s);
+LK_API char *lk_memdup  (lk_State *S, const void *buff, size_t size);
 LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
 
 
@@ -200,7 +201,7 @@ LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry);
 struct lk_Signal {
     lk_Service *src;
     void *data;
-    unsigned copy : 1;
+    unsigned free : 1;
     unsigned type : 7;
     unsigned size : 24;
     unsigned session;
@@ -583,6 +584,12 @@ LK_API char *lk_strdup (lk_State *S, const char *s) {
     return newstr;
 }
 
+LK_API char *lk_memdup (lk_State *S, const void *buff, size_t size) {
+    char *newstr = (char*)lk_malloc(S, size);
+    memcpy(newstr, buff, size);
+    return newstr;
+}
+
 LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
     size_t len = strlen(s);
     if (len >= n - 1) {
@@ -929,7 +936,11 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
         WaitForSingleObject(poll->event, timeout);
     }
     if (node) {
+        lk_State *S = slot->S;
         if (sig) *sig = node->data;
+        lk_lock(S->lock);
+        lkQ_enqueue(&S->freed_signals, node);
+        lk_unlock(S->lock);
         return LK_OK;
     }
     return poll->status >= LK_STOPPING ? LK_ERR : LK_TIMEOUT;
@@ -1132,12 +1143,6 @@ static lk_SignalNode *lkS_fetchsignalG (lk_State *S, const lk_Signal *sig) {
     lk_unlock(S->lock);
     if (node == NULL) node = (lk_SignalNode*)lk_malloc(S, sizeof(lk_SignalNode));
     node->data = *sig;
-    if (sig->copy) {
-        char *buff = (char*)lk_malloc(S, sig->size+1);
-        memcpy(buff, sig->data, sig->size);
-        buff[sig->size] = '\0';
-        node->data.data = buff;
-    }
     return node;
 }
 
@@ -1290,21 +1295,22 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
 
 LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, const void *data, size_t size) {
     lk_Signal sig = LK_SIGNAL;
-    sig.copy = 1;
+    sig.free = 1;
     sig.type = type;
     sig.session = session;
     sig.size = size;
-    sig.data = (char*)data;
+    sig.data = lk_memdup(slot->S, data, size);
     return lk_emit(slot, &sig);
 }
 
 LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const char *s) {
     lk_Signal sig = LK_SIGNAL;
-    sig.copy = 1;
+    sig.free = 1;
     sig.type = type;
     sig.session = session;
     sig.size = strlen(s);
-    sig.data = (char*)s;
+    sig.data = lk_malloc(slot->S, sig.size + 1);
+    memcpy(sig.data, s, sig.size + 1);
     return lk_emit(slot, &sig);
 }
 
@@ -1472,7 +1478,7 @@ static void lkT_callslot (lk_State *S, lk_SignalNode *node, lk_Context *ctx) {
         lk_try(S, ctx, ret = src->refactor(S, src->ud, slot, &node->data));
     if (ret == LK_ERR && slot->handler)
         lk_try(S, ctx, slot->handler(S, slot->ud, slot, &node->data));
-    if (node->data.copy)
+    if (node->data.free)
         lk_free(S, node->data.data);
 }
 
@@ -1923,14 +1929,10 @@ LK_API void lk_log(lk_State *S, const char *fmt, ...) {
 LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l) {
     lk_Slot *logger = S->logger;
     if (logger) {
-        lk_Signal sig = LK_SIGNAL;
         lk_Buffer B;
         lk_initbuffer(S, &B);
         lk_addvfstring(&B, fmt, l);
-        sig.copy = 1;
-        sig.size = lk_buffsize(&B);
-        sig.data = lk_buffer(&B);
-        lk_emit(logger, &sig);
+        lk_emitdata(logger, 0, 0, lk_buffer(&B), lk_buffsize(&B));
         lk_freebuffer(&B);
     }
 }
