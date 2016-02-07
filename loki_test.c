@@ -59,5 +59,5 @@ int main(void) {
     return 0;
 }
 
-/* unixcc: input+='service_*.c' libs+='-pthread -ldl -lrt' */
+/* unixcc: flags+='-O0 -ggdb' input+='service_*.c' libs+='-pthread -ldl -lrt' */
 /* win32cc: input+='service_*.c' libs+='-lws2_32' */

@@ -76,7 +76,7 @@ struct lk_Timer {
 
 struct lk_TimerState {
     lk_State  *S;
-    lk_Timer  *freed;
+    lk_MemPool timers;
     lk_Timer **heap;
     lk_Slot   *poll;
     lk_Lock    lock;
@@ -155,11 +155,7 @@ LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
     lk_State *S = lk_state((lk_Slot*)svr);
     lk_Timer *timer;
     lk_lock(ts->lock);
-    timer = ts->freed;
-    if (timer == NULL)
-        timer = (lk_Timer*)lk_malloc(S, sizeof(lk_Timer));
-    else
-        ts->freed = timer->u.next;
+    timer = (lk_Timer*)lk_poolalloc(&ts->timers);
     timer->u.ud = ud;
     timer->handler = cb;
     timer->ts = ts;
@@ -173,9 +169,7 @@ LK_API void lk_deltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
     lkT_canceltimer(ts, timer);
-    timer->handler = NULL;
-    timer->u.next = ts->freed;
-    ts->freed = timer;
+    lk_poolfree(&ts->timers, timer);
     lk_unlock(ts->lock);
 }
 
@@ -191,15 +185,6 @@ LK_API void lk_canceltimer(lk_Timer *timer) {
     lk_lock(ts->lock);
     lkT_canceltimer(ts, timer);
     lk_unlock(ts->lock);
-}
-
-static void lkT_cleartimers(lk_TimerState *ts) {
-    size_t i;
-    for (i = 0; i < ts->heap_used; ++i)
-        lk_free(ts->S, ts->heap[i]);
-    lk_free(ts->S, ts->heap);
-    memset(ts, 0, sizeof(lk_TimerState));
-    ts->nexttime = LK_FOREVER;
 }
 
 static void lkT_updatetimers(lk_TimerState *ts, lk_Time current) {
@@ -222,6 +207,7 @@ static lk_TimerState *lkT_newstate (lk_State *S) {
     if (!lk_initlock(&ts->lock))
         lk_discard(S);
     ts->S = S;
+    lk_initmempool(S, &ts->timers, sizeof(lk_Timer), 0);
     return ts;
 }
 
@@ -241,14 +227,10 @@ static int lkT_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
         if (lk_wait(slot, NULL, waittime) == LK_ERR)
             break;
     }
-    lkT_cleartimers(ts);
+    ts->nexttime = LK_FOREVER;
     lk_freelock(ts->lock);
+    lk_freemempool(&ts->timers);
     lk_free(S, ts->heap);
-    while (ts->freed != NULL) {
-        lk_Timer *next = ts->freed->u.next;
-        lk_free(S, ts->freed);
-        ts->freed = next;
-    }
     lk_free(S, ts);
     return LK_OK;
 }
@@ -264,8 +246,7 @@ static int lkT_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
             if (ret > 0) lk_starttimer(timer, ret);
             else {
                 lk_lock(ts->lock);
-                timer->u.next = ts->freed;
-                ts->freed = timer;
+                lk_poolfree(&ts->timers, timer);
                 lk_unlock(ts->lock);
             }
         }
@@ -281,7 +262,7 @@ LKMOD_API int loki_service_timer(lk_State *S) {
     return LK_WEAK;
 }
 
-/* win32cc: flags+='-Wextra -s -O3 -mdll -std=c89 -pedantic' libs+='-lws2_32'
+/* win32cc: flags+='-Wextra -s -O3 -mdll' libs+='-lws2_32'
  * win32cc: input='lokilib.c service_*.c' output='loki.dll'
  * unixcc: flags+='-Wextra -s -O3 -fPIC -shared' libs+='-pthread -ldl'
  * unixcc: input='lokilib.c service_*.c' output='loki.so' */

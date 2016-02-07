@@ -39,15 +39,6 @@
 # define LKMOD_API LK_API
 #endif
 
-#ifndef LK_PATH
-# ifdef _WIN32
-#   define LK_PATH "!\\services\\?.dll;" "!\\..\\services\\?.dll;" "!\\?.dll;" \
-                   ".\\services\\?.dll;" "..\\services\\?.dll;" ".\\?.dll"
-# else
-#   define LK_PATH "services/?.so;" "../services/?.so;" "./?.so"
-# endif
-#endif /* LK_PATH */
-
 #define LK_OK      (0)
 #define LK_WEAK    (1)
 #define LK_ERR     (-1)
@@ -65,8 +56,14 @@ typedef struct lk_State   lk_State;
 typedef struct lk_Service lk_Service;
 typedef struct lk_Slot    lk_Slot;
 
-typedef struct lk_Signal  lk_Signal;
-typedef struct lk_Reg     lk_Reg;
+typedef struct lk_Signal {
+    lk_Service *src;
+    void *data;
+    unsigned free : 1;
+    unsigned type : 7;
+    unsigned size : 24;
+    unsigned session;
+} lk_Signal;
 
 typedef int lk_ServiceHandler (lk_State *S);
 typedef int lk_SignalHandler  (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig);
@@ -139,22 +136,59 @@ LK_API lk_State   *lk_state   (lk_Slot *slot);
 LK_API lk_SignalHandler *lk_slothandler (lk_Slot *slot, void **pud);
 LK_API void lk_setslothandler (lk_Slot *slot, lk_SignalHandler *h, void *ud);
 
-LK_API int lk_register (lk_State *S, const lk_Reg *slots, void *ud);
-
 
 /* memory management */
 
 LK_API void *lk_malloc  (lk_State *S, size_t size);
 LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
 LK_API void  lk_free    (lk_State *S, void *ptr);
+
 LK_API char *lk_strdup  (lk_State *S, const char *s);
 LK_API char *lk_memdup  (lk_State *S, const void *buff, size_t size);
 LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
 
 
+LK_NS_END
+
+#endif /* loki_h */
+
+/****************************************************************************/
+
+#ifndef lk_utils_h
+#define lk_utils_h
+
+LK_NS_BEGIN
+
+
+/* memory pool routines */
+
+#define LK_MPOOLPAGESIZE 4096
+
+typedef struct lk_MemPool {
+    void *pages;
+    void *freed;
+    lk_State *S;
+    size_t size;
+    size_t align;
+} lk_MemPool;
+
+LK_API void  lk_initmempool (lk_State *S, lk_MemPool *mpool, size_t size, size_t align);
+LK_API void  lk_freemempool (lk_MemPool *mpool);
+LK_API void *lk_poolalloc   (lk_MemPool *mpool);
+LK_API void  lk_poolfree    (lk_MemPool *mpool, void *obj);
+
+
 /* buffer routines */
 
-typedef struct lk_Buffer lk_Buffer;
+#define LK_BUFFERSIZE 1024
+
+typedef struct lk_Buffer {
+    size_t size;
+    size_t capacity;
+    lk_State *S;
+    char *buff;
+    char init_buff[LK_BUFFERSIZE];
+} lk_Buffer;
 
 #define lk_buffer(B)      ((B)->buff)
 #define lk_buffsize(B)    ((B)->size)
@@ -177,10 +211,21 @@ LK_API void lk_replacebuffer (lk_Buffer *B, char origch, char newch);
 LK_API const char *lk_buffresult (lk_Buffer *B);
 
 
-/* hash table routines */
+/* table routines */
 
-typedef struct lk_Entry lk_Entry;
-typedef struct lk_Table lk_Table;
+typedef struct lk_Entry {
+    int next;
+    unsigned hash;
+    const char *key;
+    void *value;
+} lk_Entry;
+
+typedef struct lk_Table {
+    size_t   size;
+    size_t   lastfree;
+    lk_State *S;
+    lk_Entry *hash;
+}lk_Table;
 
 LK_API void lk_inittable (lk_State *S, lk_Table *t);
 LK_API void lk_freetable (lk_Table *t, int freekey);
@@ -194,51 +239,11 @@ LK_API void      lk_delentry (lk_Table *t, lk_Entry *e, int freekey);
 LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry);
 
 
-/* public structures */
-
-#define LK_BUFFERSIZE 1024
-
-struct lk_Signal {
-    lk_Service *src;
-    void *data;
-    unsigned free : 1;
-    unsigned type : 7;
-    unsigned size : 24;
-    unsigned session;
-};
-
-struct lk_Reg {
-    const char *name;
-    lk_SignalHandler *handler;
-};
-
-struct lk_Buffer {
-    size_t size;
-    size_t capacity;
-    lk_State *S;
-    char *buff;
-    char init_buff[LK_BUFFERSIZE];
-};
-
-struct lk_Entry {
-    int next;
-    unsigned hash;
-    const char *key;
-    void *value;
-};
-
-struct lk_Table {
-    size_t   size;
-    size_t   lastfree;
-    lk_State *S;
-    lk_Entry *hash;
-};
-
-
 LK_NS_END
 
-#endif /* loki_h */
+#endif /* lk_pool_h */
 
+/****************************************************************************/
 
 #ifndef lk_thread_h
 #define lk_thread_h
@@ -323,9 +328,36 @@ typedef pthread_t         lk_Thread;
 
 #endif /* lk_thread_h */
 
+/****************************************************************************/
 
 #ifndef lk_queue_h
 #define lk_queue_h
+
+#define lkL_entry(T) T *next; T **pprev
+
+#define lkL_init(n)                    do { \
+    (n)->pprev = &(n)->next;                \
+    (n)->next = NULL;                     } while (0)
+
+#define lkL_insert(h, n)               do { \
+    (n)->pprev = (h);                       \
+    (n)->next = *(h);                       \
+    if (*(h) != NULL)                       \
+        (*(h))->pprev = &(n)->next;         \
+    *(h) = (n);                           } while (0)
+
+#define lkL_remove(n)                  do { \
+    if ((n)->next != NULL)                  \
+        (n)->next->pprev = (n)->pprev;      \
+    *(n)->pprev = (n)->next;              } while (0)
+
+#define lkL_apply(h, type, stmt)       do { \
+    type *cur = (type*)(h);                 \
+    (h) = NULL;                             \
+    while (cur)      {                      \
+        type *next_ = cur->next;            \
+        stmt;                               \
+        cur = next_; }                    } while (0)
 
 #define lkQ_entry(T) T *next
 #define lkQ_type(T)  struct { T *first; T *last; }
@@ -361,14 +393,15 @@ typedef pthread_t         lk_Thread;
         (n) = (n)->next; }                } while (0)
 
 #define lkQ_apply(h, type, stmt)       do { \
-    type *cur = (h)->first;                 \
+    type *cur = (type*)(h)->first;          \
     while (cur != NULL) {                   \
-        type *next = cur->next;             \
+        type *next_ = cur->next;            \
         stmt;                               \
-        cur = next;     }                 } while (0)
+        cur = next_;    }                 } while (0)
 
 #endif /* lk_queue_h */
 
+/****************************************************************************/
 
 #ifndef lk_context_h
 #define lk_context_h
@@ -415,6 +448,7 @@ LK_NS_END
 
 #endif /* lk_context_h */
 
+/****************************************************************************/
 
 #if defined(LOKI_IMPLEMENTATION) && !defined(lk_implemented)
 #define lk_implemented
@@ -434,6 +468,15 @@ LK_NS_END
 # define LK_PREFIX "loki_service_"
 #endif /* LK_PREFIX */
 
+#ifndef LK_PATH
+# ifdef _WIN32
+#   define LK_PATH "!\\services\\?.dll;" "!\\..\\services\\?.dll;" "!\\?.dll;" \
+                   ".\\services\\?.dll;" "..\\services\\?.dll;" ".\\?.dll"
+# else
+#   define LK_PATH "services/?.so;" "../services/?.so;" "./?.so"
+# endif
+#endif /* LK_PATH */
+
 #define LK_MAX_THREADS    32
 #define LK_MAX_NAMESIZE   32
 #define LK_MAX_SLOTNAME   63
@@ -447,8 +490,8 @@ LK_NS_END
 #define LK_STOPPING   3
 #define LK_ZOMBIE     4 /* service stopping but has signal unprocessed */
 
-
 LK_NS_BEGIN
+
 
 /* structures */
 
@@ -505,14 +548,15 @@ struct lk_State {
     lk_Buffer path;
     lk_Slot  *logger;
     lk_Slot  *monitor;
-    lkQ_type(lk_Cleanup)    freed_cleanups;
-    lkQ_type(lk_SignalNode) freed_signals;
-    lkQ_type(lk_Service)    active_services;
+    lk_MemPool cleanups;
+    lk_MemPool signals;
+    lkQ_type(lk_Service) active_services;
     lk_TlsKey tls_index;
     lk_Lock   lock;
     lk_Event  event;
     lk_Thread threads[LK_MAX_THREADS];
 #ifdef LK_DEBUG_MEM
+    lk_Lock   memlock;
     unsigned  totalmem;
 #endif
 };
@@ -532,9 +576,9 @@ LK_API void *lk_malloc (lk_State *S, size_t size) {
     void *ptr = malloc(size + 8);
     if (ptr == NULL) lkM_outofmemory(S);
     *(size_t*)ptr = size;
-    lk_lock(S->lock);
+    lk_lock(S->memlock);
     S->totalmem += size;
-    lk_unlock(S->lock);
+    lk_unlock(S->memlock);
     return (char*)ptr + 8;
 #else
     void *ptr = malloc(size);
@@ -550,10 +594,10 @@ LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size) {
     if (newptr == NULL) lkM_outofmemory(S);
     if (ptr) oldsize = *(size_t*)newptr;
     *(size_t*)newptr = size;
-    lk_lock(S->lock);
+    lk_lock(S->memlock);
     S->totalmem += size;
     S->totalmem -= oldsize;
-    lk_unlock(S->lock);
+    lk_unlock(S->memlock);
     return (char*)newptr + 8;
 #else
     void *newptr = realloc(ptr, size);
@@ -569,9 +613,9 @@ LK_API void lk_free (lk_State *S, void *ptr) {
     if (ptr == NULL) return;
     size = *(size_t*)rptr;
     free(rptr);
-    lk_lock(S->lock);
+    lk_lock(S->memlock);
     S->totalmem -= size;
-    lk_unlock(S->lock);
+    lk_unlock(S->memlock);
 #else
     (void)S; free(ptr);
 #endif
@@ -601,6 +645,68 @@ LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
         memset(dst+len, 0, n-len);
     }
     return dst;
+}
+
+
+/* memory pool routines */
+
+static void lkM_dividepage (lk_MemPool *mpool, void *page) {
+    ptrdiff_t pageaddr = (ptrdiff_t)page;
+    ptrdiff_t pageend  = pageaddr + LK_MPOOLPAGESIZE;
+    const size_t align = mpool->align;
+    const size_t size  = mpool->size;
+    pageaddr += sizeof(void*);
+    for (;;) {
+        ptrdiff_t obj = pageaddr;
+        obj = (obj + sizeof(void*) - 1) & ~(sizeof(void*)-1);
+        obj += sizeof(void*);
+        if (align > sizeof(void*))
+            obj = (obj + align - 1) & ~(align - 1);
+        if (obj + (ptrdiff_t)size > pageend)
+            return;
+        ((void**)obj)[-1] = mpool->freed;
+        mpool->freed = (void*)obj;
+        pageaddr = obj + size;
+    }
+}
+
+LK_API void lk_initmempool (lk_State *S, lk_MemPool *mpool, size_t size, size_t align) {
+    if (align == 0) align = sizeof(void*);
+    mpool->pages = NULL;
+    mpool->freed = NULL;
+    mpool->S = S;
+    mpool->size = size;
+    mpool->align = align;
+    assert(LK_MPOOLPAGESIZE / size > 1);
+    assert(((align - 1) & align) == 0);
+    assert(((sizeof(void*)-1) & sizeof(void*)) == 0);
+}
+
+LK_API void lk_freemempool (lk_MemPool *mpool) {
+    while (mpool->pages != NULL) {
+        void *next = *(void**)mpool->pages;
+        lk_free(mpool->S, mpool->pages);
+        mpool->pages = next;
+    }
+    lk_initmempool(mpool->S, mpool, mpool->size, mpool->align);
+}
+
+LK_API void *lk_poolalloc (lk_MemPool *mpool) {
+    void *obj = mpool->freed;
+    if (obj == NULL) {
+        void *newpage = lk_malloc(mpool->S, LK_MPOOLPAGESIZE);
+        *(void**)newpage = mpool->pages;
+        mpool->pages = newpage;
+        lkM_dividepage(mpool, newpage);
+        obj = mpool->freed;
+    }
+    mpool->freed = ((void**)obj)[-1];
+    return obj;
+}
+
+LK_API void lk_poolfree (lk_MemPool *mpool, void *obj) {
+    ((void**)obj)[-1] = mpool->freed;
+    mpool->freed = obj;
 }
 
 
@@ -939,7 +1045,7 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
         lk_State *S = slot->S;
         if (sig) *sig = node->data;
         lk_lock(S->lock);
-        lkQ_enqueue(&S->freed_signals, node);
+        lk_poolfree(&S->signals, node);
         lk_unlock(S->lock);
         return LK_OK;
     }
@@ -1121,7 +1227,14 @@ static void lkS_delpollG (lk_State *S, lk_Poll *poll) {
     lk_freeevent(poll->event);
     lk_freelock(poll->lock);
     lk_lock(S->lock);
-    lkQ_merge(&S->freed_signals, poll->signals.first);
+    {
+        lk_SignalNode *node = poll->signals.first;
+        while (node) {
+            lk_SignalNode *next = node->next;
+            lk_poolfree(&S->signals, node);
+            node = next;
+        }
+    }
     lk_unlock(S->lock);
     lk_free(S, poll);
 }
@@ -1134,16 +1247,6 @@ static lk_Slot *lkS_findslotG (lk_State *S, const char *name) {
     if (e != NULL) slot = (lk_Slot*)e->value;
     lk_unlock(S->lock);
     return slot;
-}
-
-static lk_SignalNode *lkS_fetchsignalG (lk_State *S, const lk_Signal *sig) {
-    lk_SignalNode *node;
-    lk_lock(S->lock);
-    lkQ_dequeue(&S->freed_signals, node);
-    lk_unlock(S->lock);
-    if (node == NULL) node = (lk_SignalNode*)lk_malloc(S, sizeof(lk_SignalNode));
-    node->data = *sig;
-    return node;
 }
 
 static void lkS_emitpollP (lk_Poll *poll, lk_SignalNode *node) {
@@ -1227,32 +1330,6 @@ LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_SignalHandler *h, 
     return &poll->slot;
 }
 
-LK_API int lk_register (lk_State *S, const lk_Reg *slots, void *ud) {
-    lk_Service *svr = lk_self(S);
-    lk_Buffer B;
-    const lk_Reg *begin = slots;
-    lk_initbuffer(S, &B);
-    lk_lock(S->lock);
-    for (; slots->name != NULL; ++slots) {
-        lk_Slot *slot;
-        if (lkS_check(S, "newslot", slots->name))
-            continue;
-        slot = lkS_new(S, sizeof(lk_Slot), lkS_name(svr, &B, slots->name));
-        lk_freebuffer(&B);
-        slot->service = svr;
-        slot->handler = slots->handler;
-        slot->ud = ud;
-        if ((slot = lkS_register(S, slot)) != NULL) {
-            slot->next = svr->slots;
-            svr->slots = slot;
-        }
-        if (slot == NULL)
-            lk_log(S, "E[newslot]", lk_loc("slot '%s' exists"), slots->name);
-    }
-    lk_unlock(S->lock);
-    return slots - begin;
-}
-
 LK_API lk_Slot *lk_slot (lk_State *S, const char *name) {
     lk_Slot *slot = NULL;
     if (strchr(name, '.') == NULL) {
@@ -1278,8 +1355,11 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
         lk_log(S, "E[emit]" lk_loc("can not emit signal"));
         return LK_ERR;
     }
-    node = lkS_fetchsignalG(S, sig);
+    lk_lock(S->lock);
+    node = (lk_SignalNode*)lk_poolalloc(&S->signals);
+    lk_unlock(S->lock);
     node->slot = slot;
+    node->data = *sig;
     node->data.src = src;
     if (slot->ispoll)
         lkS_emitpollP((lk_Poll*)slot, node);
@@ -1353,7 +1433,14 @@ LK_API void lk_pushcontext (lk_State *S, lk_Context *ctx, lk_Service *svr) {
 
 LK_API void lk_popcontext (lk_State *S, lk_Context *ctx) {
     lk_lock(S->lock);
-    lkQ_merge(&S->freed_cleanups, ctx->cleanups);
+    {
+        lk_Cleanup *cleanups = ctx->cleanups;
+        while (cleanups) {
+            lk_Cleanup *next = cleanups->next;
+            lk_poolfree(&S->cleanups, next);
+            cleanups = next;
+        }
+    }
     lk_unlock(S->lock);
     lk_settls(S->tls_index, ctx->prev);
 }
@@ -1497,7 +1584,7 @@ static void lkT_callslotsGS (lk_State *S, lk_Service *svr) {
         lk_Service *src = node->data.src;
         lkT_callslot(S, node, &ctx);
         lk_lock(S->lock);
-        lkQ_enqueue(&S->freed_signals, node);
+        lk_poolfree(&S->signals, node);
         lk_lock(src->lock);
         if (--src->pending == 0 && src->status == LK_ZOMBIE)
             lkQ_enqueue(&S->active_services, svr);
@@ -1707,31 +1794,6 @@ LK_API lk_Service *lk_require (lk_State *S, const char *name) {
 LK_API void lk_setthreads (lk_State *S, int threads)
 { if (S->status == LK_INITIALING) S->nthreads = threads; }
 
-static void lkG_delstate (lk_State *S) {
-    lk_Entry *e = NULL;
-    size_t i;
-    while (lk_nextentry(&S->slots, &e)) {
-        lk_Slot *slot = (lk_Slot*)e->value;
-        if (slot == &slot->service->slot)
-            lkT_delserviceG(S, (lk_Service*)slot);
-    }
-    lkQ_apply(&S->freed_cleanups, lk_Cleanup, lk_free(S, cur));
-    lkQ_apply(&S->freed_signals, lk_SignalNode, lk_free(S, cur));
-    lk_freetable(&S->preload, 1);
-    lk_freetable(&S->config, 1);
-    lk_freetable(&S->slots, 0);
-    lk_freebuffer(&S->path);
-    for (i = 0; i < S->nthreads; ++i)
-        lk_freethread(S->threads[i]);
-    lk_freeevent(S->event);
-    lk_freetls(S->tls_index);
-    lk_freelock(S->lock);
-#ifdef LK_DEBUG_MEM
-    assert(S->totalmem == 0);
-#endif
-    free(S);
-}
-
 static void lkG_onrequire (lk_State *S, lk_Service *svr) {
     if (S->monitor) {
         lk_Service *svrs[2];
@@ -1773,6 +1835,32 @@ static int lkG_initroot (lk_State *S, const char *name) {
     return lk_initlock(&svr->lock);
 }
 
+static void lkG_delstate (lk_State *S) {
+    lk_Entry *e = NULL;
+    size_t i;
+    while (lk_nextentry(&S->slots, &e)) {
+        lk_Slot *slot = (lk_Slot*)e->value;
+        if (slot == &slot->service->slot)
+            lkT_delserviceG(S, (lk_Service*)slot);
+    }
+    lk_freemempool(&S->cleanups);
+    lk_freemempool(&S->signals);
+    lk_freetable(&S->preload, 1);
+    lk_freetable(&S->config, 1);
+    lk_freetable(&S->slots, 0);
+    lk_freebuffer(&S->path);
+    for (i = 0; i < S->nthreads; ++i)
+        lk_freethread(S->threads[i]);
+    lk_freeevent(S->event);
+    lk_freetls(S->tls_index);
+    lk_freelock(S->lock);
+#ifdef LK_DEBUG_MEM
+    lk_freelock(S->memlock);
+    assert(S->totalmem == 0);
+#endif
+    free(S);
+}
+
 LK_API lk_State *lk_newstate (const char *name) {
     lk_State *S = (lk_State*)malloc(sizeof(lk_State));
     if (S == NULL) return NULL;
@@ -1782,6 +1870,11 @@ LK_API lk_State *lk_newstate (const char *name) {
     if (!lk_initevent(&S->event))   goto err_event;
     if (!lk_initlock(&S->lock))     goto err;
     if (!lkG_initroot(S, name))     goto err;
+#ifdef LK_DEBUG_MEM
+    (void)lk_initlock(&S->memlock);
+#endif /* LK_DEBUG_MEM */
+    lk_initmempool(S, &S->cleanups, sizeof(lk_Cleanup), 0);
+    lk_initmempool(S, &S->signals, sizeof(lk_SignalNode), 0);
     lk_inittable(S, &S->preload);
     lk_inittable(S, &S->slots);
     lk_initbuffer(S, &S->path);
@@ -1851,19 +1944,23 @@ LK_API int lk_pcall (lk_State *S, lk_Handler *h, void *ud) {
 
 LK_API int lk_discard (lk_State *S) {
     lk_Context *ctx = lk_context(S);
-    lk_Cleanup *cleanups = ctx->cleanups;
     if (ctx == NULL) {
         fprintf(stderr, "unproected errors\n");
         abort();
     }
-    while (cleanups != NULL) {
-        lk_Cleanup *next = cleanups->next;
-        cleanups->h(S, cleanups->ud);
-        cleanups = next;
-    }
     if (ctx->cleanups != NULL) {
+        lk_Cleanup *cleanups = ctx->cleanups;
+        while (cleanups != NULL) {
+            lk_Cleanup *next = cleanups->next;
+            cleanups->h(S, cleanups->ud);
+            cleanups = next;
+        }
         lk_lock(S->lock);
-        lkQ_merge(&S->freed_cleanups, ctx->cleanups);
+        while (cleanups != NULL) {
+            lk_Cleanup *next = cleanups->next;
+            lk_poolfree(&S->cleanups, cleanups);
+            cleanups = next;
+        }
         lk_unlock(S->lock);
     }
     lk_throw(S, ctx);
@@ -1876,9 +1973,7 @@ LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud) {
     if (ctx == NULL)
         return LK_ERR;
     lk_lock(S->lock);
-    lkQ_dequeue(&S->freed_cleanups, cleanup);
-    if (cleanup == NULL)
-        cleanup = (lk_Cleanup*)lk_malloc(S, sizeof(lk_Cleanup));
+    cleanup = (lk_Cleanup*)lk_poolalloc(&S->cleanups);
     lk_unlock(S->lock);
     cleanup->h = h;
     cleanup->ud = ud;
