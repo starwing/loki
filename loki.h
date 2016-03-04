@@ -137,17 +137,6 @@ LK_API lk_SignalHandler *lk_slothandler (lk_Slot *slot, void **pud);
 LK_API void lk_setslothandler (lk_Slot *slot, lk_SignalHandler *h, void *ud);
 
 
-/* memory management */
-
-LK_API void *lk_malloc  (lk_State *S, size_t size);
-LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
-LK_API void  lk_free    (lk_State *S, void *ptr);
-
-LK_API char *lk_strdup  (lk_State *S, const char *s);
-LK_API char *lk_memdup  (lk_State *S, const void *buff, size_t size);
-LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
-
-
 LK_NS_END
 
 #endif /* loki_h */
@@ -158,6 +147,17 @@ LK_NS_END
 #define lk_utils_h
 
 LK_NS_BEGIN
+
+
+/* memory management */
+
+LK_API void *lk_malloc  (lk_State *S, size_t size);
+LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
+LK_API void  lk_free    (lk_State *S, void *ptr);
+
+LK_API char *lk_strdup  (lk_State *S, const char *s);
+LK_API char *lk_memdup  (lk_State *S, const void *buff, size_t size);
+LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
 
 
 /* memory pool routines */

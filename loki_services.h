@@ -5,6 +5,11 @@
 #include "loki.h"
 
 
+LK_API int lk_openlibs(lk_State *S);
+
+
+/* timer service */
+
 #ifndef lk_Time
 # ifdef LOKI_USE_64BIT_TIMER
 typedef unsigned long long lk_Time;
@@ -18,11 +23,6 @@ typedef struct lk_Timer lk_Timer;
 
 typedef lk_Time lk_TimerHandler (lk_State *S, void *ud, lk_Timer *timer, lk_Time delayed);
 
-
-LK_API int lk_openlibs(lk_State *S);
-
-
-/* timer service */
 
 LKMOD_API int loki_service_timer(lk_State *S);
 
@@ -85,6 +85,7 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,
 
 
 #endif /* loki_services_h */
+
 
 #if defined(LOKI_IMPLEMENTATION) && !defined(loki_services_implemented)
 #define loki_services_implemented

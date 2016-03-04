@@ -364,11 +364,11 @@ static int lkL_freelog(lk_LogState* ls) {
 }
 
 static int lkL_write(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    if (sig && sig->data) {
-        lk_LogState *ls = (lk_LogState*)ud;
+    lk_LogState *ls = (lk_LogState*)ud;
+    if (!sig)
+        lkL_freelog(ls);
+    else if (sig->data)
         lkL_writelog(ls, lk_name((lk_Slot*)sig->src), (char*)sig->data);
-    }
-    
     return LK_OK;
 }
 
@@ -381,9 +381,8 @@ static lk_LogState* lkL_newstate(lk_State *S) {
 LKMOD_API int loki_service_log(lk_State *S) {
     lk_LogState *ls = lkL_newstate(S);
     lk_Service *svr = lk_self(S);
-    lk_setdata(svr, ls);
+    lk_setdata(S, ls);
     lk_setslothandler((lk_Slot*)svr, lkL_write, ls);
-	
     lkL_initlog(ls);
     return LK_WEAK;
 }
