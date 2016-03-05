@@ -960,6 +960,7 @@ LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry) {
             return 1;
         }
     }
+    *pentry = NULL;
     return 0;
 }
 
@@ -1644,7 +1645,7 @@ LK_API void lk_preload (lk_State *S, const char *name, lk_ServiceHandler *h) {
 
 LK_API lk_Service *lk_requiref (lk_State *S, const char *name, lk_ServiceHandler *h) {
     lk_Service *svr;
-    if ((svr = (lk_Service*)lk_slot(S, name)) != NULL) {
+    if ((svr = (lk_Service*)lkS_findslotG(S, name)) != NULL) {
         lkG_onrequire(S, svr);
         return svr;
     }
@@ -1762,7 +1763,7 @@ static void lkT_module (lk_State *S, lk_LoaderState *ls, const char *name) {
 
 LK_API lk_Service *lk_require (lk_State *S, const char *name) {
     lk_LoaderState ls;
-    if ((ls.svr = (lk_Service*)lk_slot(S, name)) != NULL) {
+    if ((ls.svr = (lk_Service*)lkS_findslotG(S, name)) != NULL) {
         lkG_onrequire(S, ls.svr);
         return ls.svr;
     }

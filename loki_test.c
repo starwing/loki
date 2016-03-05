@@ -1,4 +1,5 @@
-#define LOKI_IMPLEMENTATION
+﻿#define LOKI_IMPLEMENTATION
+#define LK_DEBUG_MEM
 #include "loki_services.h"
 
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
@@ -49,8 +50,14 @@ static int loki_service_echo(lk_State *S) {
 int main(void) {
     lk_State *S = lk_newstate(NULL);
     lk_openlibs(S);
-	lk_require(S, "log");
+    lk_require(S, "log");
     lk_setslothandler((lk_Slot*)S, resp, NULL);
+
+    lk_log(S, "I[echo]" lk_loc("test test test"));
+    lk_log(S, "T[echo]" lk_loc("test test test"));
+    lk_log(S, "V[echo]" lk_loc("test test test"));
+    lk_log(S, "W[echo]" lk_loc("test test test"));
+    lk_log(S, "E[echo]" lk_loc("你好，世界"));
 
     lk_requiref(S, "echo", loki_service_echo);
 
