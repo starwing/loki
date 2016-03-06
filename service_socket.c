@@ -166,7 +166,7 @@ static void lkL_copydata (lk_PostCmd *cmd, const char *buff, size_t size) {
 }
 
 static void lkL_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
-    lk_strncpy(cmd->info.addr, ZN_MAX_ADDRLEN, addr);
+    lk_strcpy(cmd->info.addr, addr, ZN_MAX_ADDRLEN);
     cmd->info.port = port;
 }
 
@@ -372,7 +372,7 @@ static void lkL_onrecvfrom (void *ud, zn_Udp *zudp, unsigned err, unsigned count
     sig.session = err;
     sig.size = count;
     sig.data = udp;
-    lk_strncpy(udp->info.addr, ZN_MAX_ADDRLEN, addr);
+    lk_strcpy(udp->info.addr, addr, ZN_MAX_ADDRLEN);
     udp->info.port = port;
     if (err != ZN_OK) {
         lk_log(zs->S, "E[recv]" lk_loc("%s"), zn_strerror(err));

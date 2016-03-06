@@ -1,13 +1,12 @@
-﻿#define LOKI_IMPLEMENTATION
+﻿#undef  LOKI_IMPLEMENTATION
+#define LOKI_IMPLEMENTATION
 #define LK_DEBUG_MEM
 #include "loki_services.h"
 
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
-    printf("msg: %s\n", (char*)sig->data);
-	
-    lk_log(S, "V[echo]" lk_loc("get msg:[%s]"), (char*)sig->data);
-
+    lk_log(S, "msg: %s", (char*)sig->data);
+    lk_log(S, "T[]" lk_loc("get msg:[%s]"), (char*)sig->data);
     ret = *sig;
     sig->free = 0;
     lk_emit((lk_Slot*)sig->src, &ret);
@@ -22,14 +21,14 @@ static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed)
         lk_close(S);
         return 0;
     }
-    printf("timer: %d: %u\n", *pi, elapsed);
+    lk_log(S, "V[] timer: %d: %u", *pi, elapsed);
     lk_emitstring(echo, 0, 0, "Hello World!");
     return 1000;
 }
 
 static int resp(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     if (sig != NULL) {
-        printf("res: %s\n", (char*)sig->data);
+        lk_log(S, "res: %s", (char*)sig->data);
         lk_close(S);
     }
     return LK_OK;
@@ -53,18 +52,20 @@ int main(void) {
     lk_require(S, "log");
     lk_setslothandler((lk_Slot*)S, resp, NULL);
 
-    lk_log(S, "I[echo]" lk_loc("test test test"));
-    lk_log(S, "T[echo]" lk_loc("test test test"));
-    lk_log(S, "V[echo]" lk_loc("test test test"));
-    lk_log(S, "W[echo]" lk_loc("test test test"));
-    lk_log(S, "E[echo]" lk_loc("你好，世界"));
+    lk_log(S, "");
+    lk_log(S, "I[]");
+    lk_log(S, "I[test]" lk_loc("test test test"));
+    lk_log(S, "T[test]" lk_loc("test test test"));
+    lk_log(S, "V[test]" lk_loc("test test test"));
+    lk_log(S, "W[test]" lk_loc("test test test"));
+    lk_log(S, "E[test]" lk_loc("你好，世界"));
 
     lk_requiref(S, "echo", loki_service_echo);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");
     lk_emitstring(slot, 0, 0, "Hello World!");
 
-    printf("thread count: %d\n", lk_start(S));
+    lk_log(S, "thread count: %d", lk_start(S));
     lk_waitclose(S);
     lk_close(S);
     return 0;

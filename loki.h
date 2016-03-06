@@ -89,8 +89,8 @@ LK_API int lk_addcleanup (lk_State *S, lk_Handler *h, void *ud);
 LK_API char *lk_getconfig (lk_State *S, const char *key);
 LK_API void  lk_setconfig (lk_State *S, const char *key, const char *value);
 
-LK_API void lk_log(lk_State *S, const char *fmt, ...);
-LK_API void lk_vlog(lk_State *S, const char *fmt, va_list l);
+LK_API void lk_log  (lk_State *S, const char *fmt, ...);
+LK_API void lk_vlog (lk_State *S, const char *fmt, va_list l);
 
 #define lk_str_(str) # str
 #define lk_str(str) lk_str_(str)
@@ -155,9 +155,9 @@ LK_API void *lk_malloc  (lk_State *S, size_t size);
 LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size);
 LK_API void  lk_free    (lk_State *S, void *ptr);
 
-LK_API char *lk_strdup  (lk_State *S, const char *s);
-LK_API char *lk_memdup  (lk_State *S, const void *buff, size_t size);
-LK_API char *lk_strncpy (char *dst, size_t n, const char *s);
+LK_API char *lk_strdup (lk_State *S, const char *s);
+LK_API char *lk_memdup (lk_State *S, const void *buff, size_t size);
+LK_API char *lk_strcpy (char *dst, const char *s, size_t len);
 
 
 /* memory pool routines */
@@ -243,7 +243,6 @@ LK_NS_END
 
 #endif /* lk_pool_h */
 
-/****************************************************************************/
 
 #ifndef lk_thread_h
 #define lk_thread_h
@@ -328,7 +327,6 @@ typedef pthread_t         lk_Thread;
 
 #endif /* lk_thread_h */
 
-/****************************************************************************/
 
 #ifndef lk_queue_h
 #define lk_queue_h
@@ -401,7 +399,6 @@ typedef pthread_t         lk_Thread;
 
 #endif /* lk_queue_h */
 
-/****************************************************************************/
 
 #ifndef lk_context_h
 #define lk_context_h
@@ -564,17 +561,17 @@ struct lk_State {
 
 /* memory management */
 
-static int lkM_outofmemory (lk_State *S) {
+static void *lkM_outofmemory (lk_State *S) {
     (void)S;
     fprintf(stderr, "out of memory\n");
     abort();
-    return LK_ERR;
+    return NULL;
 }
 
 LK_API void *lk_malloc (lk_State *S, size_t size) {
 #ifdef LK_DEBUG_MEM
     void *ptr = malloc(size + 8);
-    if (ptr == NULL) lkM_outofmemory(S);
+    if (ptr == NULL) return lkM_outofmemory(S);
     *(size_t*)ptr = size;
     lk_lock(S->memlock);
     S->totalmem += size;
@@ -582,7 +579,7 @@ LK_API void *lk_malloc (lk_State *S, size_t size) {
     return (char*)ptr + 8;
 #else
     void *ptr = malloc(size);
-    if (ptr == NULL) lkM_outofmemory(S);
+    if (ptr == NULL) return lkM_outofmemory(S);
     return ptr;
 #endif
 }
@@ -591,7 +588,7 @@ LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size) {
 #ifdef LK_DEBUG_MEM
     size_t oldsize = 0;
     void *newptr = realloc(ptr == NULL ? NULL : (char*)ptr-8, size + 8);
-    if (newptr == NULL) lkM_outofmemory(S);
+    if (newptr == NULL) return lkM_outofmemory(S);
     if (ptr) oldsize = *(size_t*)newptr;
     *(size_t*)newptr = size;
     lk_lock(S->memlock);
@@ -601,7 +598,7 @@ LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size) {
     return (char*)newptr + 8;
 #else
     void *newptr = realloc(ptr, size);
-    if (newptr == NULL) lkM_outofmemory(S);
+    if (newptr == NULL) return lkM_outofmemory(S);
     return newptr;
 #endif
 }
@@ -634,15 +631,15 @@ LK_API char *lk_memdup (lk_State *S, const void *buff, size_t size) {
     return newstr;
 }
 
-LK_API char *lk_strncpy (char *dst, size_t n, const char *s) {
-    size_t len = strlen(s);
-    if (len >= n - 1) {
-        memcpy(dst, s, n-1);
-        dst[n-1] = '\0';
+LK_API char *lk_strcpy (char *dst, const char *s, size_t len) {
+    size_t srclen = strlen(s);
+    if (srclen >= len - 1) {
+        memcpy(dst, s, len-1);
+        dst[len-1] = '\0';
     }
     else {
-        memcpy(dst, s, len);
-        memset(dst+len, 0, n-len);
+        memcpy(dst, s, srclen);
+        memset(dst+srclen, 0, len-srclen);
     }
     return dst;
 }
@@ -1588,7 +1585,7 @@ static void lkT_callslotsGS (lk_State *S, lk_Service *svr) {
         lk_poolfree(&S->signals, node);
         lk_lock(src->lock);
         if (--src->pending == 0 && src->status == LK_ZOMBIE)
-            lkQ_enqueue(&S->active_services, svr);
+            lkQ_enqueue(&S->active_services, src);
         lk_unlock(src->lock);
         lk_unlock(S->lock);
         node = next;
@@ -1828,7 +1825,7 @@ static void lkG_onclose (lk_State *S, lk_Service *svr) {
 
 static int lkG_initroot (lk_State *S, const char *name) {
     lk_Service *svr = &S->root;
-    lk_strncpy(svr->slot.name, LK_MAX_NAMESIZE, name);
+    lk_strcpy(svr->slot.name, name, LK_MAX_NAMESIZE);
     svr->slot.S = S;
     svr->slot.service = svr;
     svr->slots = &svr->slot;
