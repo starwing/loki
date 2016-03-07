@@ -30,10 +30,8 @@ typedef enum lk_ConfigMaskFlag {
     lk_Mreload   = 1 << 0,
     lk_Mcolor    = 1 << 1,
     lk_Mscreen   = 1 << 2,
-    lk_Mtimeshow = 1 << 3,
-    lk_Mlineshow = 1 << 4,
-    lk_Minterval = 1 << 5,
-    lk_Mfilepath = 1 << 6
+    lk_Minterval = 1 << 3,
+    lk_Mfilepath = 1 << 4
 } lk_ConfigMaskFlag;
 
 typedef struct lk_Dumper {
@@ -50,8 +48,6 @@ typedef struct lk_LogConfig {
     unsigned mask;
     int color; /* 1248:RGBI, low 4bit: fg, high 4bit: bg */
     int screen;
-    int timeshow;
-    int lineshow;
     int interval;
     lk_Dumper *dumper;
 } lk_LogConfig;
@@ -66,6 +62,7 @@ typedef struct lk_LogState {
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
+    config->mask &= ~lk_M##key;                        \
     if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
         config->key = atoi(s);                         \
         config->mask |= lk_M##key;                     \
@@ -75,6 +72,7 @@ typedef struct lk_LogState {
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
+    config->mask &= ~lk_M##key;                        \
     if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
         lk_strcpy(config->key, lk_buffer(buff),        \
                 LK_MAX_CONFIGPATH);                    \
@@ -190,8 +188,6 @@ static lk_LogConfig *lkL_newconfig(lk_LogState *ls, const char *name) {
     memset(config, 0, sizeof(*config));
     lk_strcpy(config->name, name, LK_MAX_CONFIGNAME);
     config->mask |= lk_Mreload;
-    config->timeshow = 1;
-    config->lineshow = 1;
     config->color = 0x77;
     e->key   = config->name;
     e->value = config;
@@ -205,8 +201,6 @@ static lk_LogConfig* lkL_getconfig(lk_LogState *ls, const char *name) {
         lk_initbuffer(ls->S, &buff);
         lkL_readinteger(ls, &buff, config, color);
         lkL_readinteger(ls, &buff, config, screen);
-        lkL_readinteger(ls, &buff, config, timeshow);
-        lkL_readinteger(ls, &buff, config, lineshow);
         lkL_readinteger(ls, &buff, config, interval);
         lkL_readstring(ls,  &buff, config, filepath);
         lk_freebuffer(&buff);
@@ -218,8 +212,6 @@ static int lkL_mergeconfig(lk_LogConfig *c1, lk_LogConfig *c2) {
     if (c1 == NULL || c2 == NULL) return -1;
     if (c2->mask & lk_Mcolor)    c1->color = c2->color;
     if (c2->mask & lk_Mscreen)   c1->screen = c2->screen;
-    if (c2->mask & lk_Mtimeshow) c1->timeshow = c2->timeshow;
-    if (c2->mask & lk_Mlineshow) c1->lineshow = c2->lineshow;
     if (c2->mask & lk_Minterval) c1->interval = c2->interval;
     if (c2->mask & lk_Mfilepath) lk_strcpy(c1->filepath, c2->filepath, LK_MAX_CONFIGPATH);
     c1->mask |= c2->mask;
