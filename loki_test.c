@@ -6,7 +6,7 @@
 static int echo(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
     lk_log(S, "msg: %s", (char*)sig->data);
-    lk_log(S, "T[]" lk_loc("get msg:[%s]"), (char*)sig->data);
+    lk_log(S, "T[]" lk_loc("get msg: [%s]"), (char*)sig->data);
     ret = *sig;
     sig->free = 0;
     lk_emit((lk_Slot*)sig->src, &ret);

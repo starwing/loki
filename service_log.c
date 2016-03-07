@@ -23,6 +23,7 @@ typedef struct lk_LogHeader {
     const char *key;
     const char *msg;
     size_t      msglen;
+    struct tm   tm;
     lk_Buffer   buff;
 } lk_LogHeader;
 
@@ -119,7 +120,7 @@ static void lkL_openfile(lk_LogState *ls, lk_Dumper* dumper) {
         case 'Y': lk_addfstring(&buff, "%04d", tm.tm_year + 1900); break;
         case 'M': lk_addfstring(&buff, "%02d", tm.tm_mon + 1); break;
         case 'D': lk_addfstring(&buff, "%02d", tm.tm_mday); break;
-        case 'I': lk_addfstring(&buff, "%d", dumper->index + 1); break;
+        case 'I': lk_addfstring(&buff, "%d", dumper->index); break;
         default:  lk_addchar(&buff, '%'); /* FALLTHROUGH */
         case '%': lk_addchar(&buff, *s); break;
         }
@@ -284,6 +285,27 @@ no_tag:
     hs->key = lk_buffer(&hs->buff) + offset_key;
 }
 
+static void lkL_headerdump(lk_LogState *ls, lk_LogHeader *hs, FILE *fp) {
+    struct tm *tm = &hs->tm;
+    if (hs->tag) fprintf(fp, "[%c][%s][%02d:%02d:%02d][%s]: ", 
+            toupper(hs->level[0]), hs->service,
+            tm->tm_hour, tm->tm_min, tm->tm_sec, hs->tag);
+    else fprintf(fp, "[%c][%s][%02d:%02d:%02d]: ", 
+            toupper(hs->level[0]), hs->service,
+            tm->tm_hour, tm->tm_min, tm->tm_sec);
+}
+
+static void lkL_filedump(lk_LogState *ls, lk_LogHeader *hs, lk_Dumper *dumper) {
+    if (dumper->interval > 0 || !dumper->fp)
+        lkL_wheelfile(ls, dumper);
+    if (dumper->fp) {
+        lkL_headerdump(ls, hs, dumper->fp);
+        fwrite(hs->msg, 1, hs->msglen, dumper->fp);
+        fputc('\n', dumper->fp);
+        fflush(dumper->fp);
+    }
+}
+
 static void lkL_screendump(lk_LogState *ls, const char *s, size_t len, int color)  {
 #ifdef _WIN32
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -318,35 +340,19 @@ static void lkL_screendump(lk_LogState *ls, const char *s, size_t len, int color
 #endif
 }
 
-static void lkL_filedump(lk_LogState *ls, const char *s, size_t len, lk_Dumper *dumper) {
-    if (dumper->interval > 0 || !dumper->fp)
-        lkL_wheelfile(ls, dumper);
-    if (dumper->fp) {
-        fwrite(s, 1, len, dumper->fp);
-        fputc('\n', dumper->fp);
-        fflush(dumper->fp);
-    }
-}
-
 static int lkL_writelog(lk_LogState *ls, const char* service_name, char* s, size_t len) {
     lk_LogConfig *config;
     lk_LogHeader hs;
-    struct tm tm;
-
     lk_initbuffer(ls->S, &hs.buff);
     lkL_parseheader(&hs, service_name, s, len);
-    lkL_localtime(time(NULL), &tm);
-    if (hs.tag) fprintf(stdout, "[%c][%s][%02d:%02d:%02d][%s]: ", 
-            toupper(hs.level[0]), service_name,
-            tm.tm_hour, tm.tm_min, tm.tm_sec, hs.tag);
-    else fprintf(stdout, "[%c][%s][%02d:%02d:%02d]: ", 
-            toupper(hs.level[0]), service_name,
-            tm.tm_hour, tm.tm_min, tm.tm_sec);
     config = lkL_setconfig(ls, &hs);
-    if (config->screen)
-        lkL_screendump(ls, hs.msg, hs.msglen, config->color);
+    lkL_localtime(time(NULL), &hs.tm);
     if (config->dumper)
-        lkL_filedump(ls, hs.msg, hs.msglen, config->dumper);
+        lkL_filedump(ls, &hs, config->dumper);
+    if (config->screen) {
+        lkL_headerdump(ls, &hs, stdout);
+        lkL_screendump(ls, hs.msg, hs.msglen, config->color);
+    }
     lk_freebuffer(&hs.buff);
     return 0;
 }
