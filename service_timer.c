@@ -4,6 +4,11 @@
 #include <assert.h>
 #include <string.h>
 
+#ifdef __APPLE__
+# include <mach/mach.h>
+# include <mach/mach_time.h>
+#endif
+
 
 #ifdef _WIN32
 
@@ -31,7 +36,7 @@ LK_API lk_Time lk_time(void) {
 	(void)mach_timebase_info(&time_info);
     }
     uint64_t now = mach_absolute_time();
-    return (zn_Time)((now - start) * time_info.numer / time_info.denom / 1000000);
+    return (lk_Time)((now - start) * time_info.numer / time_info.denom / 1000000);
 #else
     static lk_Time start = ~(lk_Time)0;
     struct timespec ts;
@@ -52,7 +57,7 @@ LK_API lk_Time lk_time(void) {
 
 /* implements */
 
-#define lkT_getstate(svr)  ((lk_TimerState*)lk_data(svr))
+#define lkX_getstate(svr)  ((lk_TimerState*)lk_data((lk_Slot*)svr))
 
 #define LK_TIMER_NOINDEX (~(unsigned)0)
 #define LK_FOREVER       (~(lk_Time)0)
@@ -85,19 +90,20 @@ struct lk_TimerState {
     unsigned heap_size;
 };
 
-static int lkT_resizeheap(lk_TimerState *ts, size_t size) {
+static int lkX_resizeheap(lk_TimerState *ts, size_t size) {
     lk_Timer **heap;
     size_t realsize = LK_MIN_TIMEHEAP;
     while (realsize < size && realsize < LK_MAX_SIZET/sizeof(lk_Timer*)/2)
         realsize <<= 1;
     if (realsize < size) return 0;
-    heap = (lk_Timer**)lk_realloc(ts->S, ts->heap, realsize*sizeof(lk_Timer*));
+    heap = (lk_Timer**)lk_realloc(ts->S, ts->heap,
+            realsize*sizeof(lk_Timer*), ts->heap_size*sizeof(lk_Timer*));
     ts->heap = heap;
     ts->heap_size = realsize;
     return 1;
 }
 
-static void lkT_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
+static void lkX_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
     unsigned index = timer->index;
     if (index == LK_TIMER_NOINDEX) return;
     timer->index = LK_TIMER_NOINDEX;
@@ -124,12 +130,12 @@ static void lkT_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
     timer->index = index;
 }
 
-static void lkT_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) {
+static void lkX_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) {
     unsigned index;
     if (timer->index != LK_TIMER_NOINDEX)
-        lkT_canceltimer(ts, timer);
+        lkX_canceltimer(ts, timer);
     if (ts->heap_size <= ts->heap_used)
-        lkT_resizeheap(ts, ts->heap_size * 2);
+        lkX_resizeheap(ts, ts->heap_size * 2);
     index = ts->heap_used++;
     timer->starttime = lk_time();
     timer->emittime = timer->starttime + delayms;
@@ -151,11 +157,11 @@ static void lkT_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) 
 }
 
 LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
-    lk_TimerState *ts = lkT_getstate(svr);
+    lk_TimerState *ts = lkX_getstate(svr);
     lk_State *S = lk_state((lk_Slot*)svr);
     lk_Timer *timer;
     lk_lock(ts->lock);
-    timer = (lk_Timer*)lk_poolalloc(&ts->timers);
+    timer = (lk_Timer*)lk_poolalloc(ts->S, &ts->timers);
     timer->u.ud = ud;
     timer->handler = cb;
     timer->ts = ts;
@@ -168,31 +174,31 @@ LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
 LK_API void lk_deltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
-    lkT_canceltimer(ts, timer);
-    lk_poolfree(&ts->timers, timer);
+    lkX_canceltimer(ts, timer);
+    lk_poolfree(ts->S, &ts->timers, timer);
     lk_unlock(ts->lock);
 }
 
 LK_API void lk_starttimer(lk_Timer *timer, lk_Time delayms) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
-    lkT_starttimer(ts, timer, delayms);
+    lkX_starttimer(ts, timer, delayms);
     lk_unlock(ts->lock);
 }
 
 LK_API void lk_canceltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
-    lkT_canceltimer(ts, timer);
+    lkX_canceltimer(ts, timer);
     lk_unlock(ts->lock);
 }
 
-static void lkT_updatetimers(lk_TimerState *ts, lk_Time current) {
+static void lkX_updatetimers(lk_TimerState *ts, lk_Time current) {
     if (ts->nexttime > current) return;
     while (ts->heap_used && ts->heap[0]->emittime <= current) {
         lk_Signal sig = LK_SIGNAL;
         lk_Timer *timer = ts->heap[0];
-        lkT_canceltimer(ts, timer);
+        lkX_canceltimer(ts, timer);
         timer->emittime = current;
         sig.data = timer;
         lk_emit((lk_Slot*)timer->service, &sig);
@@ -200,25 +206,25 @@ static void lkT_updatetimers(lk_TimerState *ts, lk_Time current) {
     ts->nexttime = ts->heap_used == 0 ? LK_FOREVER : ts->heap[0]->emittime;
 }
 
-static lk_TimerState *lkT_newstate (lk_State *S) {
+static lk_TimerState *lkX_newstate (lk_State *S) {
     lk_TimerState *ts = (lk_TimerState*)
         lk_malloc(S, sizeof(lk_TimerState));
     memset(ts, 0, sizeof(*ts));
     if (!lk_initlock(&ts->lock))
         lk_discard(S);
     ts->S = S;
-    lk_initmempool(S, &ts->timers, sizeof(lk_Timer), 0);
+    lk_initmempool(&ts->timers, sizeof(lk_Timer), 0);
     return ts;
 }
 
-static int lkT_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = (lk_TimerState*)ud;
+static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    lk_TimerState *ts = (lk_TimerState*)lk_data(slot);
     lk_Time nexttime, current;
-    (void)S; (void)sig;
+    (void)sig;
     for (;;) {
         int waittime;
         lk_lock(ts->lock);
-        lkT_updatetimers(ts, current = lk_time());
+        lkX_updatetimers(ts, current = lk_time());
         nexttime = ts->nexttime;
         assert(nexttime > current);
         lk_unlock(ts->lock);
@@ -228,37 +234,39 @@ static int lkT_poller (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
             break;
     }
     ts->nexttime = LK_FOREVER;
+    lk_freemempool(S, &ts->timers);
     lk_freelock(ts->lock);
-    lk_freemempool(&ts->timers);
-    lk_free(S, ts->heap);
-    lk_free(S, ts);
+    lk_free(S, ts->heap, ts->heap_size * sizeof(lk_Timer*));
+    lk_free(S, ts, sizeof(lk_TimerState));
     return LK_OK;
 }
 
-static int lkT_refactor (lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = (lk_TimerState*)ud;
+static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    lk_TimerState *ts = lkX_getstate((lk_Slot*)sig->src);
+    lk_Timer *timer = (lk_Timer*)sig->data;
     (void)slot;
-    if (sig != NULL) {
-        lk_Timer *timer = (lk_Timer*)sig->data;
-        if (timer->handler) {
-            int ret = timer->handler(S, timer->u.ud, timer,
-                    timer->emittime - timer->starttime);
-            if (ret > 0) lk_starttimer(timer, ret);
-            else {
-                lk_lock(ts->lock);
-                lk_poolfree(&ts->timers, timer);
-                lk_unlock(ts->lock);
-            }
+    if (timer->handler) {
+        int ret = timer->handler(S, timer->u.ud, timer,
+                timer->emittime - timer->starttime);
+        if (ret > 0) lk_starttimer(timer, ret);
+        else {
+            lk_lock(ts->lock);
+            lk_poolfree(ts->S, &ts->timers, timer);
+            lk_unlock(ts->lock);
         }
     }
     return LK_OK;
 }
 
-LKMOD_API int loki_service_timer(lk_State *S) {
-    lk_TimerState *ts = lkT_newstate(S);
-    lk_setdata(S, ts);
-    ts->poll = lk_newpoll(S, "poll", lkT_poller, ts);
-    lk_setrefactor(S, lkT_refactor, (void*)ts);
+LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    (void)sig;
+    if (slot == NULL) {
+        lk_TimerState *ts = lkX_newstate(S);
+        lk_Service *svr = lk_self(S);
+        ts->poll = lk_newpoll(S, "poll", lkX_poller, ts);
+        lk_setrefactor(svr, lkX_refactor);
+        lk_setdata((lk_Slot*)svr, ts);
+    }
     return LK_WEAK;
 }
 

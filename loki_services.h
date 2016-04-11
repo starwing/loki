@@ -5,10 +5,52 @@
 #include "loki.h"
 
 
-LK_API int lk_openlibs(lk_State *S);
+/* services */
+
+LKMOD_API lk_Handler loki_service_loader;
+LKMOD_API lk_Handler loki_service_log;
+LKMOD_API lk_Handler loki_service_monitor;
+LKMOD_API lk_Handler loki_service_socket;
+LKMOD_API lk_Handler loki_service_timer;
 
 
-/* timer service */
+/* loader interface */
+
+#ifndef LK_PATH
+# ifdef _WIN32
+#   define LK_PATH "!\\services\\?.dll;" "!\\..\\services\\?.dll;" "!\\?.dll;" \
+                   ".\\services\\?.dll;" "..\\services\\?.dll;" ".\\?.dll"
+# else
+#   define LK_PATH "services/?.so;" "../services/?.so;" "./?.so"
+# endif
+#endif /* LK_PATH */
+
+typedef struct lk_Loader lk_Loader;
+
+typedef int lk_LoaderHandler (lk_State *S, void *ud, lk_Loader *l, const char *name);
+
+LK_API int lk_loaderror  (lk_Loader *loader, const char *msg, ...);
+LK_API int lk_loadverror (lk_Loader *loader, const char *msg, va_list l);
+
+LK_API void lk_sethandler (lk_Loader *loader, lk_Handler *h, void *ud);
+LK_API void lk_setmodule  (lk_Loader *loader, void *module);
+
+LK_API void lk_preload (lk_Service *svr, const char *name, lk_Handler *h);
+
+LK_API lk_Service *lk_require (lk_Service *svr, const char *name);
+
+LK_API void lk_addpath   (lk_Service *svr, const char *path);
+LK_API void lk_addloader (lk_Service *svr, lk_LoaderHandler *h, void *ud);
+
+
+/* monitor interface */
+
+lk_Handler loki_service_monitor;
+
+
+
+
+/* timer interface */
 
 #ifndef lk_Time
 # ifdef LOKI_USE_64BIT_TIMER
@@ -23,9 +65,6 @@ typedef struct lk_Timer lk_Timer;
 
 typedef lk_Time lk_TimerHandler (lk_State *S, void *ud, lk_Timer *timer, lk_Time delayed);
 
-
-LKMOD_API int loki_service_timer(lk_State *S);
-
 LK_API lk_Time lk_time(void);
 
 LK_API lk_Timer *lk_newtimer (lk_Service *svr, lk_TimerHandler *h, void *ud);
@@ -35,14 +74,7 @@ LK_API void lk_starttimer  (lk_Timer *timer, lk_Time delayms);
 LK_API void lk_canceltimer (lk_Timer *timer);
 
 
-/* log service */
-
-LKMOD_API int loki_service_log(lk_State *S);
-
-
-/* socket service */
-
-LKMOD_API int loki_service_socket(lk_State *S);
+/* socket interface */
 
 typedef struct lk_Accept lk_Accept;
 typedef struct lk_Tcp    lk_Tcp;
@@ -71,8 +103,8 @@ LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port,
                         lk_ConnectHandler *h, void *ud);
 LK_API void lk_deltcp  (lk_Tcp *tcp);
 
-LK_API unsigned lk_getsession (lk_Tcp *tcp);
-LK_API void     lk_setsession (lk_Tcp *tcp, unsigned session);
+LK_API void *lk_gettcpdata (lk_Tcp *tcp);
+LK_API void  lk_settcpdata (lk_Tcp *tcp, void *data);
 
 LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size);
 
@@ -86,16 +118,3 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,
 
 #endif /* loki_services_h */
 
-
-#if defined(LOKI_IMPLEMENTATION) && !defined(loki_services_implemented)
-#define loki_services_implemented
-
-LK_API int lk_openlibs(lk_State *S) {
-    lk_preload(S, "timer",  loki_service_timer);
-    lk_preload(S, "socket", loki_service_socket);
-    lk_preload(S, "log",    loki_service_log);
-    return LK_OK;
-}
-
-
-#endif

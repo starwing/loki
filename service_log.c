@@ -1,6 +1,7 @@
 #define LOKI_MODULE
 #include "loki_services.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,9 +58,11 @@ typedef struct lk_LogState {
     lk_State *S;
     lk_Table  config;
     lk_Table  dump;
+    lk_MemPool configs;
+    lk_MemPool dumpers;
 } lk_LogState;
 
-#define lkL_readinteger(ls, buff, config, key)    do { \
+#define lkX_readinteger(ls, buff, config, key)   do { \
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
@@ -67,9 +70,9 @@ typedef struct lk_LogState {
     if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
         config->key = atoi(s);                         \
         config->mask |= lk_M##key;                     \
-        lk_free(ls->S, s); }                         } while(0)
+        lk_delstring(ls->S, (lk_String*)s); }        } while(0)
 
-#define lkL_readstring(ls, buff, config, key)     do { \
+#define lkX_readstring(ls, buff, config, key)    do { \
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
@@ -78,12 +81,12 @@ typedef struct lk_LogState {
         lk_strcpy(config->key, lk_buffer(buff),        \
                 LK_MAX_CONFIGPATH);                    \
         config->mask |= lk_M##key;                     \
-        lk_free(ls->S, s); }                         } while(0)
+        lk_delstring(ls->S, (lk_String*)s); }        } while(0)
 
 
 /* config dumper */
 
-static void lkL_localtime(time_t t, struct tm *tm)
+static void lkX_localtime(time_t t, struct tm *tm)
 #ifdef _MSC_VER
 { localtime_s(tm, &t); }
 #elif _POSIX_SOURCE
@@ -92,10 +95,10 @@ static void lkL_localtime(time_t t, struct tm *tm)
 { *tm = *localtime(&t); }
 #endif 
 
-static void lkL_settime(lk_Dumper* dumper, int interval) {
+static void lkX_settime(lk_Dumper* dumper, int interval) {
     struct tm tm;
     time_t now = time(NULL), daytm;
-    lkL_localtime(now, &tm);
+    lkX_localtime(now, &tm);
     tm.tm_hour = 0;
     tm.tm_min = 0;
     tm.tm_sec = 0;
@@ -105,11 +108,11 @@ static void lkL_settime(lk_Dumper* dumper, int interval) {
     dumper->next_update = daytm + (dumper->index + 1) * interval;
 }
 
-static void lkL_openfile(lk_LogState *ls, lk_Dumper* dumper) {
+static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
     lk_Buffer buff;
     struct tm tm;
     const char *s;
-    lkL_localtime(time(NULL), &tm);
+    lkX_localtime(time(NULL), &tm);
     lk_initbuffer(ls->S, &buff);
     for (s = dumper->name; *s != '\0'; ++s) {
         if (*s != '%') {
@@ -134,7 +137,7 @@ static void lkL_openfile(lk_LogState *ls, lk_Dumper* dumper) {
     lk_freebuffer(&buff);
 }
 
-static lk_Dumper *lkL_newdumper(lk_LogState *ls, lk_LogConfig *config, lk_LogHeader *hs) {
+static lk_Dumper *lkX_newdumper(lk_LogState *ls, lk_LogConfig *config, lk_LogHeader *hs) {
     const char *s;
     lk_Buffer buff;
     lk_Dumper *dumper;
@@ -156,24 +159,24 @@ static lk_Dumper *lkL_newdumper(lk_LogState *ls, lk_LogConfig *config, lk_LogHea
         }
     }
     lk_addchar(&buff, '\0');
-    e = lk_setentry(&ls->dump, lk_buffer(&buff));
-    if (e->value != NULL) return (lk_Dumper*)e->value;
-    dumper = (lk_Dumper*)lk_malloc(ls->S, sizeof(lk_Dumper));
+    e = lk_setentry(ls->S, &ls->dump, lk_buffer(&buff));
+    if (e->key != lk_buffer(&buff)) return (lk_Dumper*)e->key;
+    dumper = (lk_Dumper*)lk_poolalloc(ls->S, &ls->dumpers);
     memset(dumper, 0, sizeof(*dumper));
-    e->value = dumper;
     lk_strcpy(dumper->name, lk_buffer(&buff), LK_MAX_CONFIGPATH);
     lk_freebuffer(&buff);
     if (config->interval > 0)
-        lkL_settime(dumper, config->interval);
-    lkL_openfile(ls, dumper);
+        lkX_settime(dumper, config->interval);
+    lkX_openfile(ls, dumper);
+    e->key = dumper->name;
     return dumper;
 }
 
-static int lkL_wheelfile(lk_LogState* ls, lk_Dumper* dumper) {
+static int lkX_wheelfile(lk_LogState* ls, lk_Dumper* dumper) {
     if (time(NULL) > dumper->next_update) {
         if (dumper->fp) fclose(dumper->fp);
-        lkL_settime(dumper, dumper->interval);
-        lkL_openfile(ls, dumper);
+        lkX_settime(dumper, dumper->interval);
+        lkX_openfile(ls, dumper);
     }
     return 0;
 }
@@ -181,35 +184,34 @@ static int lkL_wheelfile(lk_LogState* ls, lk_Dumper* dumper) {
 
 /* config reader */
 
-static lk_LogConfig *lkL_newconfig(lk_LogState *ls, const char *name) {
-    lk_Entry *e = lk_setentry(&ls->config, name);
-    lk_LogConfig *config = (lk_LogConfig*)e->value;
-    if (config) return config;
-    config = (lk_LogConfig*)lk_malloc(ls->S, sizeof(lk_LogConfig));
+static lk_LogConfig *lkX_newconfig(lk_LogState *ls, const char *name) {
+    lk_Entry *e = lk_setentry(ls->S, &ls->config, name);
+    lk_LogConfig *config = (lk_LogConfig*)e->key;
+    if (e->key != name) return config;
+    config = (lk_LogConfig*)lk_poolalloc(ls->S, &ls->configs);
     memset(config, 0, sizeof(*config));
     lk_strcpy(config->name, name, LK_MAX_CONFIGNAME);
     config->mask |= lk_Mreload;
     config->color = 0x77;
-    e->key   = config->name;
-    e->value = config;
+    e->key = config->name;
     return config;
 }
 
-static lk_LogConfig* lkL_getconfig(lk_LogState *ls, const char *name) {
-    lk_LogConfig *config = lkL_newconfig(ls, name);
+static lk_LogConfig* lkX_getconfig(lk_LogState *ls, const char *name) {
+    lk_LogConfig *config = lkX_newconfig(ls, name);
     if (config->mask & lk_Mreload) {
         lk_Buffer buff;
         lk_initbuffer(ls->S, &buff);
-        lkL_readinteger(ls, &buff, config, color);
-        lkL_readinteger(ls, &buff, config, screen);
-        lkL_readinteger(ls, &buff, config, interval);
-        lkL_readstring(ls,  &buff, config, filepath);
+        lkX_readinteger(ls, &buff, config, color);
+        lkX_readinteger(ls, &buff, config, screen);
+        lkX_readinteger(ls, &buff, config, interval);
+        lkX_readstring(ls,  &buff, config, filepath);
         lk_freebuffer(&buff);
     }
     return config;
 }
 
-static int lkL_mergeconfig(lk_LogConfig *c1, lk_LogConfig *c2) {
+static int lkX_mergeconfig(lk_LogConfig *c1, lk_LogConfig *c2) {
     if (c1 == NULL || c2 == NULL) return -1;
     if (c2->mask & lk_Mcolor)    c1->color = c2->color;
     if (c2->mask & lk_Mscreen)   c1->screen = c2->screen;
@@ -219,25 +221,25 @@ static int lkL_mergeconfig(lk_LogConfig *c1, lk_LogConfig *c2) {
     return 0;
 }
 
-static lk_LogConfig* lkL_setconfig(lk_LogState *ls, lk_LogHeader *hs) {
-    lk_LogConfig *config = lkL_getconfig(ls, hs->key);
+static lk_LogConfig* lkX_setconfig(lk_LogState *ls, lk_LogHeader *hs) {
+    lk_LogConfig *config = lkX_getconfig(ls, hs->key);
     if (config->mask & lk_Mreload) {
-        lk_LogConfig *other = lkL_getconfig(ls, hs->level);
+        lk_LogConfig *other = lkX_getconfig(ls, hs->level);
         config->screen = 1;
         if (other->mask != lk_Mreload)
-            lkL_mergeconfig(config, other);
-        other = lkL_getconfig(ls, hs->service);
+            lkX_mergeconfig(config, other);
+        other = lkX_getconfig(ls, hs->service);
         if (other->mask == lk_Mreload)
-            other = lkL_getconfig(ls, "default_service");
+            other = lkX_getconfig(ls, "default_service");
         if (other->mask != lk_Mreload)
-            lkL_mergeconfig(config, other);
+            lkX_mergeconfig(config, other);
         if (hs->tag) {
-            other = lkL_getconfig(ls, hs->tag);
+            other = lkX_getconfig(ls, hs->tag);
             if (other->mask != lk_Mreload)
-                lkL_mergeconfig(config, other);
+                lkX_mergeconfig(config, other);
         }
         if ((config->mask & lk_Mfilepath) && config->dumper == NULL)
-            config->dumper = lkL_newdumper(ls, config, hs);
+            config->dumper = lkX_newdumper(ls, config, hs);
         config->mask &= ~lk_Mreload;
     }
     return config;
@@ -246,7 +248,7 @@ static lk_LogConfig* lkL_setconfig(lk_LogState *ls, lk_LogHeader *hs) {
 
 /* config parser */
 
-static void lkL_parseheader(lk_LogHeader *hs, const char* service, const char* s, size_t len) {
+static void lkX_parseheader(lk_LogHeader *hs, const char* service, const char* s, size_t len) {
     const char *end = s + len;
     size_t offset_key = 0; /* key struct: [level][service][tag] */
     hs->level   = "info";
@@ -285,8 +287,9 @@ no_tag:
     hs->key = lk_buffer(&hs->buff) + offset_key;
 }
 
-static void lkL_headerdump(lk_LogState *ls, lk_LogHeader *hs, FILE *fp) {
+static void lkX_headerdump(lk_LogState *ls, lk_LogHeader *hs, FILE *fp) {
     struct tm *tm = &hs->tm;
+    (void)ls;
     if (hs->tag) fprintf(fp, "[%c][%s][%02d:%02d:%02d][%s]: ", 
             toupper(hs->level[0]), hs->service,
             tm->tm_hour, tm->tm_min, tm->tm_sec, hs->tag);
@@ -295,19 +298,20 @@ static void lkL_headerdump(lk_LogState *ls, lk_LogHeader *hs, FILE *fp) {
             tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
-static void lkL_filedump(lk_LogState *ls, lk_LogHeader *hs, lk_Dumper *dumper) {
+static void lkX_filedump(lk_LogState *ls, lk_LogHeader *hs, lk_Dumper *dumper) {
     if (dumper->interval > 0 || !dumper->fp)
-        lkL_wheelfile(ls, dumper);
+        lkX_wheelfile(ls, dumper);
     if (dumper->fp) {
-        lkL_headerdump(ls, hs, dumper->fp);
+        lkX_headerdump(ls, hs, dumper->fp);
         fwrite(hs->msg, 1, hs->msglen, dumper->fp);
         fputc('\n', dumper->fp);
         fflush(dumper->fp);
     }
 }
 
-static void lkL_screendump(lk_LogState *ls, const char *s, size_t len, int color)  {
+static void lkX_screendump(lk_LogState *ls, const char *s, size_t len, int color)  {
 #ifdef _WIN32
+    lk_Buffer B;
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     WORD attr = 0, reset = FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE;
     DWORD written;
@@ -322,36 +326,38 @@ static void lkL_screendump(lk_LogState *ls, const char *s, size_t len, int color
     if (color & 0x40) attr |= BACKGROUND_BLUE;
     if (color & 0x80) attr |= BACKGROUND_INTENSITY;
     bytes = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, NULL, 0);
+    lk_initbuffer(ls->S, &B);
     if (bytes != 0) {
-        buff = (LPWSTR)lk_malloc(ls->S, bytes * sizeof(WCHAR));
+        buff = (LPWSTR)lk_prepbuffsize(&B, bytes * sizeof(WCHAR));
         bytes = MultiByteToWideChar(cp, 0, s, len, buff, bytes);
     }
     SetConsoleTextAttribute(h, attr);
     if (buff) WriteConsoleW(h, buff, bytes, &written, NULL);
     else      WriteConsoleA(h, s, len, &written, NULL);
     SetConsoleTextAttribute(h, reset);
+    lk_freebuffer(&B);
     fputc('\n', stdout);
-    lk_free(ls->S, buff);
 #else
     int fg = 30 + (color & 0x7), bg = 40 + ((color & 0x70)>>4);
+    (void)ls;
     if (color & 0x08) fg += 60;
     if (color & 0x80) bg += 60;
-    fprintf(stdout, "\e[%d;%dm%.*s\e[0m", fg, bg, len, s);
+    fprintf(stdout, "\e[%d;%dm%.*s\e[0m\n", fg, bg, (int)len, s);
 #endif
 }
 
-static int lkL_writelog(lk_LogState *ls, const char* service_name, char* s, size_t len) {
+static int lkX_writelog(lk_LogState *ls, const char* service_name, char* s, size_t len) {
     lk_LogConfig *config;
     lk_LogHeader hs;
     lk_initbuffer(ls->S, &hs.buff);
-    lkL_parseheader(&hs, service_name, s, len);
-    config = lkL_setconfig(ls, &hs);
-    lkL_localtime(time(NULL), &hs.tm);
+    lkX_parseheader(&hs, service_name, s, len);
+    config = lkX_setconfig(ls, &hs);
+    lkX_localtime(time(NULL), &hs.tm);
     if (config->dumper)
-        lkL_filedump(ls, &hs, config->dumper);
+        lkX_filedump(ls, &hs, config->dumper);
     if (config->screen) {
-        lkL_headerdump(ls, &hs, stdout);
-        lkL_screendump(ls, hs.msg, hs.msglen, config->color);
+        lkX_headerdump(ls, &hs, stdout);
+        lkX_screendump(ls, hs.msg, hs.msglen, config->color);
     }
     lk_freebuffer(&hs.buff);
     return 0;
@@ -360,87 +366,84 @@ static int lkL_writelog(lk_LogState *ls, const char* service_name, char* s, size
 
 /* config initialize */
 
-static void lkL_initlog(lk_LogState *ls) {
+static lk_LogState *lkX_newstate(lk_State *S) {
+    lk_LogState *ls = (lk_LogState*)lk_malloc(S, sizeof(lk_LogState));
     lk_LogConfig *config;
-    lk_inittable(ls->S, &ls->config);
-    lk_inittable(ls->S, &ls->dump);
+    ls->S = S;
+    lk_inittable(&ls->config);
+    lk_inittable(&ls->dump);
+    lk_initmempool(&ls->configs, sizeof(lk_LogConfig), 0);
+    lk_initmempool(&ls->dumpers, sizeof(lk_Dumper), 0);
 
     /* initialize config */
-    config = lkL_newconfig(ls, "info");
+    config = lkX_newconfig(ls, "info");
     config->screen = 1;
     config->color = 0x07;
     config->mask = lk_Mscreen|lk_Mcolor;
-    config = lkL_newconfig(ls, "trace");
+    config = lkX_newconfig(ls, "trace");
     config->screen = 1;
     config->color = 0x0F;
     config->mask = lk_Mscreen|lk_Mcolor;
-    config = lkL_newconfig(ls, "verbose");
+    config = lkX_newconfig(ls, "verbose");
     config->screen = 1;
     config->color = 0x70;
     config->mask = lk_Mscreen|lk_Mcolor;
-    config = lkL_newconfig(ls, "warning");
+    config = lkX_newconfig(ls, "warning");
     config->screen = 1;
     config->color = 0x0B;
     config->mask = lk_Mscreen|lk_Mcolor;
-    config = lkL_newconfig(ls, "error");
+    config = lkX_newconfig(ls, "error");
     config->screen = 1;
     config->color = 0x9F;
     config->mask = lk_Mscreen|lk_Mcolor;
-    config = lkL_newconfig(ls, "default_service");
+    config = lkX_newconfig(ls, "default_service");
     lk_strcpy(config->filepath, LK_DEFAULT_LOGPATH, LK_MAX_CONFIGPATH);
     config->interval = 3600;
     config->mask = lk_Mfilepath|lk_Minterval;
+
+    return ls;
 }
 
-static void lkL_freelog(lk_LogState* ls) {
+static void lkX_delstate(lk_LogState* ls) {
+    lk_freetable(ls->S, &ls->config);
+    lk_freetable(ls->S, &ls->dump);
+    lk_freemempool(ls->S, &ls->configs);
+    lk_freemempool(ls->S, &ls->dumpers);
+    lk_free(ls->S, ls, sizeof(lk_LogState));
+}
+
+static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    lk_LogState *ls = (lk_LogState*)lk_data(slot);
     lk_Entry *e = NULL;
+    (void)sig;
     while (lk_nextentry(&ls->config, &e)) {
-        lk_LogConfig *config = (lk_LogConfig*)e->value;
-        lk_free(ls->S, config);
-    }
-    while (lk_nextentry(&ls->dump, &e)) {
-        lk_Dumper *dumper = (lk_Dumper*)e->value;
-        if (dumper->fp) fclose(dumper->fp);
-        lk_free(ls->S, dumper);
-    }
-    lk_freetable(&ls->config, 0);
-    lk_freetable(&ls->dump, 0);
-    lk_free(ls->S, ls);
-}
-
-static int lkL_write(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_LogState *ls = (lk_LogState*)ud;
-    if (!sig) lkL_freelog(ls);
-    else if (sig->data)
-        lkL_writelog(ls, lk_name((lk_Slot*)sig->src), (char*)sig->data, sig->size);
-    return LK_OK;
-}
-
-static int lkL_update(lk_State *S, void *ud, lk_Slot *slot, lk_Signal *sig) {
-    lk_LogState *ls = (lk_LogState*)ud;
-    lk_Entry *e = NULL;
-    while (lk_nextentry(&ls->config, &e)) {
-        lk_LogConfig *config = (lk_LogConfig*)e->value;
+        lk_LogConfig *config = (lk_LogConfig*)e->key;
         config->mask |= lk_Mreload;
         config->dumper = NULL;
     }
     while (lk_nextentry(&ls->dump, &e)) {
-        lk_Dumper *dumper = (lk_Dumper*)e->value;
+        lk_Dumper *dumper = (lk_Dumper*)e->key;
         if (dumper->fp) fclose(dumper->fp);
-        lk_free(ls->S, dumper);
+        lk_poolfree(S, &ls->dumpers, dumper);
+        e->key = NULL;
     }
-    lk_freetable(&ls->dump, 0);
     return LK_OK;
 }
 
-LKMOD_API int loki_service_log(lk_State *S) {
-    lk_Service *svr = lk_self(S);
-    lk_LogState *ls = (lk_LogState*)lk_malloc(S, sizeof(lk_LogState));
-    ls->S = S;
-    lk_setdata(S, ls);
-    lk_setslothandler((lk_Slot*)svr, lkL_write, ls);
-    lkL_initlog(ls);
-    lk_newslot(S, "update", lkL_update, ls);
-    return LK_WEAK;
+LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    if (slot == NULL) {
+        lk_LogState *ls = lkX_newstate(S);
+        lk_Service *svr = lk_self(S);
+        lk_setdata((lk_Slot*)svr, ls);
+        lk_newslot(S, "update", lkX_update, ls);
+        return LK_WEAK;
+    }
+    else {
+        lk_LogState *ls = (lk_LogState*)lk_data(slot);
+        if (!sig) lkX_delstate(ls);
+        else if (sig->data)
+            lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, sig->size);
+        return LK_OK;
+    }
 }
 

@@ -5,4 +5,4 @@
 *.o
 *.un~
 *_test
-logfile/
+logs/
