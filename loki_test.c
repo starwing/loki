@@ -67,6 +67,31 @@ static int loki_service_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
+static int my_monitor(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    if (slot == NULL) {
+        lk_log(S, "T[monitor] initialized!");
+        int *p = lk_malloc(S, sizeof(int));
+        lk_setdata(lk_current(S), p);
+        return LK_WEAK;
+    }
+    else if (sig == NULL) {
+        lk_log(S, "T[monitor] shutdown!");
+        lk_free(S, lk_data(slot), sizeof(int));
+        return LK_OK;
+    }
+    if (sig->type == 0)
+        lk_log(S, "T[monitor] service '%s' required by '%s'!",
+                (char*)sig->data, (char*)sig->src);
+    else if (sig->type == 1)
+        lk_log(S, "T[monitor] service '%s' launched by '%s'!",
+                (char*)sig->data, (char*)sig->src);
+    else if (sig->type == 2)
+        lk_log(S, "T[monitor] service '%s' mark weak!", (char*)sig->src);
+    else if (sig->type == 3)
+        lk_log(S, "T[monitor] service '%s' closed!", (char*)sig->src);
+    return LK_OK;
+}
+
 int main(void) {
     lk_State *S;
     (void)lk_initlock(&memlock);
@@ -84,6 +109,7 @@ int main(void) {
     lk_log(S, "W[test]" lk_loc("test test test"));
     lk_log(S, "E[test]" lk_loc("你好，世界"));
 
+    lk_launch(S, "monitor", my_monitor, NULL);
     lk_launch(S, "echo", loki_service_echo, NULL);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");
