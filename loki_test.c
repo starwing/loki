@@ -7,6 +7,7 @@ static lk_Lock memlock;
 
 static void *debug_allocf(void *ud, void *ptr, size_t size, size_t osize) {
     void *newptr = NULL;
+    (void)ud;
     if (size == 0) free(ptr);
     else newptr = realloc(ptr, size);
     lk_lock(memlock);
@@ -25,6 +26,7 @@ static void *debug_allocf(void *ud, void *ptr, size_t size, size_t osize) {
 
 static int echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     lk_Signal ret;
+    (void)slot;
     lk_log(S, "msg: %s", (char*)sig->data);
     lk_log(S, "T[]" lk_loc("get msg: [%s]"), (char*)sig->data);
     ret = *sig;
@@ -36,6 +38,7 @@ static int echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed) {
     lk_Slot *echo = lk_slot(S, "echo.echo");
     int *pi = (int*)ud;
+    (void)timer;
     if ((*pi)++ == 10) {
         lk_free(S, pi, sizeof(int));
         lk_close(S);
@@ -47,6 +50,7 @@ static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed)
 }
 
 static int resp(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    (void)slot;
     if (sig != NULL) {
         lk_log(S, "res: %s", (char*)sig->data);
         lk_close(S);
@@ -55,6 +59,7 @@ static int resp(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 }
 
 static int loki_service_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    (void)sig;
     if (slot == NULL) {
         lk_Service *svr = lk_launch(S, "timer", loki_service_timer, NULL);
         lk_Timer *t;
@@ -124,4 +129,4 @@ int main(void) {
 }
 
 /* unixcc: flags+='-ggdb' input+='service_*.c' libs+='-pthread -ldl' */
-/* win32cc: input+='service_*.c' libs+='-lws2_32' */
+/* win32cc: flags+='-Wextra -O3' input+='service_*.c' libs+='-lws2_32' */

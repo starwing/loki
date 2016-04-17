@@ -29,11 +29,10 @@ typedef struct lk_Loader lk_Loader;
 
 typedef int lk_LoaderHandler (lk_State *S, void *ud, lk_Loader *l, const char *name);
 
-LK_API int lk_loaderror  (lk_Loader *loader, const char *msg, ...);
-LK_API int lk_loadverror (lk_Loader *loader, const char *msg, va_list l);
-
-LK_API void lk_sethandler (lk_Loader *loader, lk_Handler *h, void *ud);
-LK_API void lk_setmodule  (lk_Loader *loader, void *module);
+LK_API int  lk_loaderror  (lk_Loader *loader, const char *msg, ...);
+LK_API int  lk_loadverror (lk_Loader *loader, const char *msg, va_list l);
+LK_API void lk_sethandler (lk_Loader *loader, lk_Handler *h,
+                           void *data, lk_Module mod);
 
 LK_API void lk_preload (lk_Service *svr, const char *name, lk_Handler *h);
 
@@ -45,9 +44,19 @@ LK_API void lk_addloader (lk_Service *svr, lk_LoaderHandler *h, void *ud);
 
 /* monitor interface */
 
-lk_Handler loki_service_monitor;
+typedef struct lk_Monitor lk_Monitor;
 
+struct lk_Monitor {
+    lk_State *S;
+    void *ud;
+    void (*on_require) (lk_Monitor *cbs, lk_Service *src, lk_Service *dst);
+    void (*on_weak)    (lk_Monitor *cbs, lk_Service *svr);
+    void (*on_open)    (lk_Monitor *cbs, lk_Service *src, lk_Service *dst);
+    void (*on_close)   (lk_Monitor *cbs, lk_Service *svr);
+};
 
+LK_API void lk_addmonitor (lk_Service *svr, lk_Monitor *cbs);
+LK_API void lk_delmonitor (lk_Service *svr, lk_Monitor *cbs);
 
 
 /* timer interface */

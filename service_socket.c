@@ -139,8 +139,8 @@ static lk_ZNetState *lkX_newstate (lk_State *S) {
     if (!lk_initlock(&zs->lock))          goto err_lock;
     if ((zs->zs = zn_newstate()) == NULL) goto err_znet;
     lk_inittable(&zs->hmap);
-    lk_initmempool(&zs->cmds,    sizeof(lk_PostCmd), 0);
-    lk_initmempool(&zs->accepts, sizeof(lk_Accept),  0);
+    lk_initmempool(&zs->cmds,    sizeof(lk_PostCmd));
+    lk_initmempool(&zs->accepts, sizeof(lk_Accept));
     return zs;
 err_znet:
     lk_freelock(zs->lock);

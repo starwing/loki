@@ -372,8 +372,8 @@ static lk_LogState *lkX_newstate(lk_State *S) {
     ls->S = S;
     lk_inittable(&ls->config);
     lk_inittable(&ls->dump);
-    lk_initmempool(&ls->configs, sizeof(lk_LogConfig), 0);
-    lk_initmempool(&ls->dumpers, sizeof(lk_Dumper), 0);
+    lk_initmempool(&ls->configs, sizeof(lk_LogConfig));
+    lk_initmempool(&ls->dumpers, sizeof(lk_Dumper));
 
     /* initialize config */
     config = lkX_newconfig(ls, "info");

@@ -213,7 +213,7 @@ static lk_TimerState *lkX_newstate (lk_State *S) {
     if (!lk_initlock(&ts->lock))
         lk_discard(S);
     ts->S = S;
-    lk_initmempool(&ts->timers, sizeof(lk_Timer), 0);
+    lk_initmempool(&ts->timers, sizeof(lk_Timer));
     return ts;
 }
 
