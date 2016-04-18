@@ -359,7 +359,7 @@ typedef pthread_t         lk_Thread;
 #define lkQ_enqueue(h, n)                                 do { \
     (n)->next = NULL;                                          \
     if (lkQ_empty(h)) lkQ_initheader(h, n);                    \
-    else (h)->last->next = n, (h)->last = n;                 } while (0)
+    else (h)->last->next = (n), (h)->last = (n);             } while (0)
 
 #define lkQ_dequeue(h, n)                                 do { \
     (n) = (h)->first;                                          \
@@ -372,7 +372,7 @@ typedef pthread_t         lk_Thread;
     (oh)->last = (h)->last, *(h) = *(oh);                   } while (0)
 
 #define lkQ_apply(h, type, stmt)                          do { \
-    type *cur; cur = (type*)(h)->first;                             \
+    type *cur = (type*)(h)->first;                             \
     while (cur != NULL)                                        \
     { type *next_ = cur->next; stmt; cur = next_; }          } while (0) 
 
@@ -581,11 +581,14 @@ LK_API void lk_free (lk_State *S, void *ptr, size_t osize) {
 /* memory pool routines */
 
 LK_API void lk_initmempool (lk_MemPool *mpool, size_t size) {
+    size_t sp = sizeof(void*);
+    assert(((sp - 1) & sp) == 0);
     mpool->pages = NULL;
     mpool->freed = NULL;
+    if (size < sp) size = sp;
+    if (size % sp != 0)
+        size = (size + sp - 1) & ~(sp - 1);
     mpool->size = size;
-    assert(size >= sizeof(void*));
-    assert(size % sizeof(void*) == 0);
     assert(LK_MPOOLPAGESIZE / size > 2);
 }
 
@@ -1187,14 +1190,14 @@ static const char *lkE_name (lk_Service *svr, lk_Buffer *B, const char *name) {
 
 static lk_Slot *lkE_new (lk_State *S, size_t sz, const char *name) {
     lk_Slot *slot = NULL;
-    lk_MemPool *mpool;
+    lk_MemPool *mpool = NULL;
     size_t len = strlen(name);
     assert(len < LK_MAX_NAMESIZE);
     switch (sz) {
-    default: assert(slot && !"slot size error"); break;
     case sizeof(lk_Service): mpool = &S->services; break;
     case sizeof(lk_Slot):    mpool = &S->slots; break;
     case sizeof(lk_Poll):    mpool = &S->polls; break;
+    default: assert(!"slot size error"); return NULL;
     }
     assert(mpool->size == sz);
     lk_lock(S->pool_lock);
@@ -1607,6 +1610,7 @@ retry:
     }
     if (!lkS_check(S, name)) return NULL;
     svr = (lk_Service*)lkE_new(S, sizeof(lk_Service), name);
+    if (!svr) return NULL; /* avoid MSVC warning */
     if (!lk_initlock(&svr->lock)) {
         lk_lock(S->pool_lock);
         lk_poolfree(S, &S->services, svr);
