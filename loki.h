@@ -807,7 +807,7 @@ redo:
         lk_Entry *f = NULL, *othern;
         while (t->lastfree > 0) {
             lk_Entry *e = &t->hash[--t->lastfree];
-            if (e->key == NULL)  { f = e; break; }
+            if (e->key == NULL && e->next == 0)  { f = e; break; }
         }
         if (f == NULL) {
             if (lk_resizetable(S, t, lkH_countsize(t)*2) == 0)
