@@ -3,7 +3,7 @@
 
 #define ZN_IMPLEMENTATION
 #include "znet/znet.h"
-#include "znet/znet_buffer.h"
+#include "znet/zn_buffer.h"
 
 
 #define lkX_getstate(svr) ((lk_ZNetState*)lk_data((lk_Slot*)svr))
@@ -17,7 +17,7 @@
 
 #define lkX_putpooled(var)                  do { \
     lk_lock(zs->lock);                           \
-    lk_poolfree(zs->S, &zs->var##s, var);        \
+    lk_poolfree(&zs->var##s, var);               \
     lk_unlock(zs->lock);                       } while (0)
 
 #define lkX_getcached(var,type) type *var;  do { \

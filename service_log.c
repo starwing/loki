@@ -62,7 +62,7 @@ typedef struct lk_LogState {
     lk_MemPool dumpers;
 } lk_LogState;
 
-#define lkX_readinteger(ls, buff, config, key)   do { \
+#define lkX_readinteger(ls, buff, config, key)    do { \
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
@@ -70,9 +70,9 @@ typedef struct lk_LogState {
     if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
         config->key = atoi(s);                         \
         config->mask |= lk_M##key;                     \
-        lk_delstring(ls->S, (lk_String*)s); }        } while(0)
+        lk_deldata(ls->S, (lk_Data*)s); }          } while(0)
 
-#define lkX_readstring(ls, buff, config, key)    do { \
+#define lkX_readstring(ls, buff, config, key)     do { \
     char *s;                                           \
     lk_resetbuffer(buff);                              \
     lk_addfstring(buff, "log.%s." #key, config->name); \
@@ -81,7 +81,7 @@ typedef struct lk_LogState {
         lk_strcpy(config->key, lk_buffer(buff),        \
                 LK_MAX_CONFIGPATH);                    \
         config->mask |= lk_M##key;                     \
-        lk_delstring(ls->S, (lk_String*)s); }        } while(0)
+        lk_deldata(ls->S, (lk_Data*)s); }            } while(0)
 
 
 /* config dumper */
@@ -415,7 +415,7 @@ static void lkX_delstate(lk_LogState* ls) {
 static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     lk_LogState *ls = (lk_LogState*)lk_data(slot);
     lk_Entry *e = NULL;
-    (void)sig;
+    (void)S, (void)sig;
     while (lk_nextentry(&ls->config, &e)) {
         lk_LogConfig *config = (lk_LogConfig*)e->key;
         config->mask |= lk_Mreload;
@@ -424,7 +424,7 @@ static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     while (lk_nextentry(&ls->dump, &e)) {
         lk_Dumper *dumper = (lk_Dumper*)e->key;
         if (dumper->fp) fclose(dumper->fp);
-        lk_poolfree(S, &ls->dumpers, dumper);
+        lk_poolfree(&ls->dumpers, dumper);
         e->key = NULL;
     }
     return LK_OK;
@@ -446,4 +446,9 @@ LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         return LK_OK;
     }
 }
+
+/* win32cc: flags+='-Wextra -s -O3 -mdll' libs+='-lws2_32'
+ * win32cc: input='lokilib.c service_*.c' output='loki.dll'
+ * unixcc: flags+='-Wextra -s -O3 -fPIC -shared' libs+='-pthread -ldl'
+ * unixcc: input='lokilib.c service_*.c' output='loki.so' */
 

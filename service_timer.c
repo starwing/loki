@@ -175,7 +175,7 @@ LK_API void lk_deltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
     lkX_canceltimer(ts, timer);
-    lk_poolfree(ts->S, &ts->timers, timer);
+    lk_poolfree(&ts->timers, timer);
     lk_unlock(ts->lock);
 }
 
@@ -251,7 +251,7 @@ static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         if (ret > 0) lk_starttimer(timer, ret);
         else {
             lk_lock(ts->lock);
-            lk_poolfree(ts->S, &ts->timers, timer);
+            lk_poolfree(&ts->timers, timer);
             lk_unlock(ts->lock);
         }
     }
