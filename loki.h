@@ -1050,7 +1050,7 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
         lk_State *S = slot->S;
         if (sig) *sig = node->data;
         lk_lock(S->pool_lock);
-        lk_poolfree(S, &S->signals, node);
+        lk_poolfree(&S->signals, node);
         lk_unlock(S->pool_lock);
         return LK_OK;
     }

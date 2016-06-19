@@ -141,6 +141,7 @@ static lk_ZNetState *lkX_newstate (lk_State *S) {
     lk_inittable(&zs->hmap);
     lk_initmempool(&zs->cmds,    sizeof(lk_PostCmd));
     lk_initmempool(&zs->accepts, sizeof(lk_Accept));
+    lk_initmempool(&zs->handlers, sizeof(lk_RecvHandlers));
     return zs;
 err_znet:
     lk_freelock(zs->lock);
