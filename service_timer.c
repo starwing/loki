@@ -213,7 +213,7 @@ static lk_TimerState *lkX_newstate (lk_State *S) {
     if (!lk_initlock(&ts->lock))
         lk_discard(S);
     ts->S = S;
-    lk_initmempool(&ts->timers, sizeof(lk_Timer));
+    lk_initpool(&ts->timers, sizeof(lk_Timer));
     return ts;
 }
 
@@ -234,7 +234,7 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
             break;
     }
     ts->nexttime = LK_FOREVER;
-    lk_freemempool(S, &ts->timers);
+    lk_freepool(S, &ts->timers);
     lk_freelock(ts->lock);
     lk_free(S, ts->heap, ts->heap_size * sizeof(lk_Timer*));
     lk_free(S, ts, sizeof(lk_TimerState));

@@ -159,7 +159,7 @@ static lk_Dumper *lkX_newdumper(lk_LogState *ls, lk_LogConfig *config, lk_LogHea
         }
     }
     lk_addchar(&buff, '\0');
-    e = lk_setentry(ls->S, &ls->dump, lk_buffer(&buff));
+    e = lk_settable(ls->S, &ls->dump, lk_buffer(&buff));
     if (e->key != lk_buffer(&buff)) return (lk_Dumper*)e->key;
     dumper = (lk_Dumper*)lk_poolalloc(ls->S, &ls->dumpers);
     memset(dumper, 0, sizeof(*dumper));
@@ -185,7 +185,7 @@ static int lkX_wheelfile(lk_LogState* ls, lk_Dumper* dumper) {
 /* config reader */
 
 static lk_LogConfig *lkX_newconfig(lk_LogState *ls, const char *name) {
-    lk_Entry *e = lk_setentry(ls->S, &ls->config, name);
+    lk_Entry *e = lk_settable(ls->S, &ls->config, name);
     lk_LogConfig *config = (lk_LogConfig*)e->key;
     if (e->key != name) return config;
     config = (lk_LogConfig*)lk_poolalloc(ls->S, &ls->configs);
@@ -370,10 +370,10 @@ static lk_LogState *lkX_newstate(lk_State *S) {
     lk_LogState *ls = (lk_LogState*)lk_malloc(S, sizeof(lk_LogState));
     lk_LogConfig *config;
     ls->S = S;
-    lk_inittable(&ls->config);
-    lk_inittable(&ls->dump);
-    lk_initmempool(&ls->configs, sizeof(lk_LogConfig));
-    lk_initmempool(&ls->dumpers, sizeof(lk_Dumper));
+    lk_inittable(&ls->config, sizeof(lk_Entry));
+    lk_inittable(&ls->dump, sizeof(lk_Entry));
+    lk_initpool(&ls->configs, sizeof(lk_LogConfig));
+    lk_initpool(&ls->dumpers, sizeof(lk_Dumper));
 
     /* initialize config */
     config = lkX_newconfig(ls, "info");
@@ -407,8 +407,8 @@ static lk_LogState *lkX_newstate(lk_State *S) {
 static void lkX_delstate(lk_LogState* ls) {
     lk_freetable(ls->S, &ls->config);
     lk_freetable(ls->S, &ls->dump);
-    lk_freemempool(ls->S, &ls->configs);
-    lk_freemempool(ls->S, &ls->dumpers);
+    lk_freepool(ls->S, &ls->configs);
+    lk_freepool(ls->S, &ls->dumpers);
     lk_free(ls->S, ls, sizeof(lk_LogState));
 }
 
@@ -431,20 +431,21 @@ static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 }
 
 LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    lk_LogState *ls = (lk_LogState*)lk_data(slot);
     if (slot == NULL) {
-        lk_LogState *ls = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
+        ls = lkX_newstate(S);
         lk_setdata((lk_Slot*)svr, ls);
         lk_newslot(S, "update", lkX_update, ls);
         return LK_WEAK;
     }
-    else {
-        lk_LogState *ls = (lk_LogState*)lk_data(slot);
-        if (!sig) lkX_delstate(ls);
-        else if (sig->data)
-            lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, sig->size);
-        return LK_OK;
+    else if (!sig)
+        lkX_delstate(ls);
+    else if (sig->data && sig->size > 0) {
+        size_t size = sig->size - (((char*)sig->data)[sig->size-1] == '\0');
+        lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, size);
     }
+    return LK_OK;
 }
 
 /* win32cc: flags+='-Wextra -s -O3 -mdll' libs+='-lws2_32'

@@ -131,6 +131,11 @@ struct lk_Udp {
     zn_PeerInfo info;
 };
 
+typedef struct lk_HandlersEntry {
+    lk_Entry entry;
+    lk_RecvHandlers *handlers;
+} lk_HandlersEntry;
+
 static lk_ZNetState *lkX_newstate (lk_State *S) {
     lk_ZNetState *zs = (lk_ZNetState*)lk_malloc(S, sizeof(lk_ZNetState));
     memset(zs, 0, sizeof(*zs));
@@ -138,10 +143,10 @@ static lk_ZNetState *lkX_newstate (lk_State *S) {
     zn_initialize();
     if (!lk_initlock(&zs->lock))          goto err_lock;
     if ((zs->zs = zn_newstate()) == NULL) goto err_znet;
-    lk_inittable(&zs->hmap);
-    lk_initmempool(&zs->cmds,    sizeof(lk_PostCmd));
-    lk_initmempool(&zs->accepts, sizeof(lk_Accept));
-    lk_initmempool(&zs->handlers, sizeof(lk_RecvHandlers));
+    lk_inittable(&zs->hmap, sizeof(lk_HandlersEntry));
+    lk_initpool(&zs->cmds,    sizeof(lk_PostCmd));
+    lk_initpool(&zs->accepts, sizeof(lk_Accept));
+    lk_initpool(&zs->handlers, sizeof(lk_RecvHandlers));
     return zs;
 err_znet:
     lk_freelock(zs->lock);
@@ -152,11 +157,11 @@ err_lock:
 }
 
 static lk_RecvHandlers *lkX_gethandlers(lk_ZNetState *zs, lk_Service *svr) {
-    lk_Entry *e;
+    lk_HandlersEntry *e;
     lk_RecvHandlers *hs = NULL;
     lk_lock(zs->lock);
-    e = lk_getentry(zs->S, &zs->hmap, (const char*)svr);
-    if (e) hs = (lk_RecvHandlers*)e->value.ptr;
+    e = (lk_HandlersEntry*)lk_gettable(&zs->hmap, (const char*)svr);
+    if (e) hs = (lk_RecvHandlers*)e->handlers;
     lk_unlock(zs->lock);
     return hs;
 }
@@ -188,9 +193,9 @@ static void lkX_postdeletor (void *ud, zn_State *S) {
     zn_close(zs->zs);
     zn_deinitialize();
     lk_freetable(zs->S, &zs->hmap);
-    lk_freemempool(zs->S, &zs->cmds);
-    lk_freemempool(zs->S, &zs->accepts);
-    lk_freemempool(zs->S, &zs->handlers);
+    lk_freepool(zs->S, &zs->cmds);
+    lk_freepool(zs->S, &zs->accepts);
+    lk_freepool(zs->S, &zs->handlers);
     lkL_apply(zs->tcps, lk_Tcp, lk_free(zs->S, cur, sizeof(lk_Tcp)));
     lkL_apply(zs->freed_tcps, lk_Tcp, lk_free(zs->S, cur, sizeof(lk_Tcp)));
     lkL_apply(zs->udps, lk_Udp, lk_free(zs->S, cur, sizeof(lk_Udp)));
@@ -578,12 +583,13 @@ static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 /* interfaces */
 
 static lk_RecvHandlers *lkX_sethandlers (lk_ZNetState *zs) {
-    lk_Entry *e = lk_setentry(zs->S, &zs->hmap, (const char*)lk_self(zs->S));
-    if (e->value.ptr == NULL) {
-        e->value.ptr = lk_poolalloc(zs->S, &zs->handlers);
-        memset(e->value.ptr, 0, sizeof(lk_RecvHandlers));
+    lk_HandlersEntry *e =
+        (lk_HandlersEntry*)lk_settable(zs->S, &zs->hmap, (const char*)lk_self(zs->S));
+    if (e->handlers == NULL) {
+        e->handlers = lk_poolalloc(zs->S, &zs->handlers);
+        memset(e->handlers, 0, sizeof(lk_RecvHandlers));
     }
-    return (lk_RecvHandlers*)e->value.ptr;
+    return e->handlers;
 }
 
 LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud) {

@@ -137,16 +137,9 @@ LK_NS_BEGIN
 
 #include <string.h>
 
-/* memory management */
-
-LK_API void *lk_malloc  (lk_State *S, size_t size);
-LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size, size_t osize);
-LK_API void  lk_free    (lk_State *S, void *ptr, size_t osize);
-
-
-/* memory pool routines */
-
 #define LK_MPOOLPAGESIZE 4096
+
+/* memory management */
 
 typedef struct lk_MemPool {
     void *pages;
@@ -154,19 +147,23 @@ typedef struct lk_MemPool {
     size_t size;
 } lk_MemPool;
 
-LK_API void  lk_initmempool (lk_MemPool *mpool, size_t size);
-LK_API void  lk_freemempool (lk_State *S, lk_MemPool *mpool);
-LK_API void *lk_poolalloc   (lk_State *S, lk_MemPool *mpool);
-LK_API void  lk_poolfree    (lk_MemPool *mpool, void *obj);
+LK_API void *lk_malloc    (lk_State *S, size_t size);
+LK_API void *lk_realloc   (lk_State *S, void *ptr, size_t size, size_t osize);
+LK_API void  lk_free      (lk_State *S, void *ptr, size_t osize);
+LK_API void  lk_initpool  (lk_MemPool *mpool, size_t size);
+LK_API void  lk_freepool  (lk_State *S, lk_MemPool *mpool);
+LK_API void *lk_poolalloc (lk_State *S, lk_MemPool *mpool);
+LK_API void  lk_poolfree  (lk_MemPool *mpool, void *obj);
 
 
 /* string routines */
 
 typedef struct lk_Data lk_Data;
 
-LK_API lk_Data *lk_newstring  (lk_State *S, const char *s);
-LK_API lk_Data *lk_newdata (lk_State *S, const char *s, size_t len);
-LK_API void     lk_deldata  (lk_State *S, lk_Data *s);
+LK_API lk_Data *lk_newstring (lk_State *S, const char *s);
+LK_API lk_Data *lk_newdata   (lk_State *S, const char *s, size_t len);
+LK_API void     lk_deldata   (lk_State *S, lk_Data *s);
+LK_API size_t   lk_len       (lk_Data *s);
 
 LK_API char *lk_strcpy (char *dst, const char *s, size_t len);
 
@@ -207,28 +204,29 @@ LK_API lk_Data *lk_buffresult (lk_Buffer *B);
 /* table routines */
 
 typedef struct lk_Entry {
-    int next;
+    int      next;
     unsigned hash;
     const char *key;
-    union {
-        void *ptr;
-        ptrdiff_t num;
-    } value;
 } lk_Entry;
 
 typedef struct lk_Table {
     size_t   size;
+    size_t   entry_size;
     size_t   lastfree;
     lk_Entry *hash;
-}lk_Table;
+} lk_Table;
 
-LK_API void lk_inittable (lk_Table *t);
+typedef struct lk_PtrEntry { lk_Entry entry; void *data; } lk_PtrEntry;
+
+#define lk_key(e) (((lk_Entry*)(e))->key)
+
+LK_API void lk_inittable (lk_Table *t, size_t entry_size);
 LK_API void lk_freetable (lk_State *S, lk_Table *t);
 
 LK_API size_t lk_resizetable (lk_State *S, lk_Table *t, size_t len);
 
-LK_API lk_Entry *lk_getentry (lk_State *S, lk_Table *t, const char *key);
-LK_API lk_Entry *lk_setentry (lk_State *S, lk_Table *t, const char *key);
+LK_API lk_Entry *lk_gettable (lk_Table *t, const char *key);
+LK_API lk_Entry *lk_settable (lk_State *S, lk_Table *t, const char *key);
 
 LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry);
 
@@ -548,6 +546,9 @@ struct lk_State {
 
 /* memory management */
 
+LK_API void lk_poolfree (lk_MemPool *mpool, void *obj)
+{ *(void**)obj = mpool->freed; mpool->freed = obj; }
+
 static void *lkM_outofmemory (void) {
     fprintf(stderr, "out of memory\n");
     abort();
@@ -567,17 +568,11 @@ LK_API void *lk_realloc (lk_State *S, void *ptr, size_t size, size_t osize) {
 }
 
 LK_API void lk_free (lk_State *S, void *ptr, size_t osize) {
-    void *newptr = S->allocf(S->alloc_ud, ptr, 0, osize);
+    void *newptr = ptr ? S->allocf(S->alloc_ud, ptr, 0, osize) : NULL;
     assert(newptr == NULL);
 }
 
-
-/* memory pool routines */
-
-LK_API void lk_poolfree (lk_MemPool *mpool, void *obj)
-{ *(void**)obj = mpool->freed; mpool->freed = obj; }
-
-LK_API void lk_initmempool (lk_MemPool *mpool, size_t size) {
+LK_API void lk_initpool (lk_MemPool *mpool, size_t size) {
     size_t sp = sizeof(void*);
     assert(((sp - 1) & sp) == 0);
     mpool->pages = NULL;
@@ -588,14 +583,14 @@ LK_API void lk_initmempool (lk_MemPool *mpool, size_t size) {
     assert(LK_MPOOLPAGESIZE / size > 2);
 }
 
-LK_API void lk_freemempool (lk_State *S, lk_MemPool *mpool) {
+LK_API void lk_freepool (lk_State *S, lk_MemPool *mpool) {
     const size_t offset = LK_MPOOLPAGESIZE - sizeof(void*);
     while (mpool->pages != NULL) {
         void *next = *(void**)((char*)mpool->pages + offset);
         lk_free(S, mpool->pages, LK_MPOOLPAGESIZE);
         mpool->pages = next;
     }
-    lk_initmempool(mpool, mpool->size);
+    lk_initpool(mpool, mpool->size);
 }
 
 LK_API void *lk_poolalloc (lk_State *S, lk_MemPool *mpool) {
@@ -623,10 +618,13 @@ LK_API void *lk_poolalloc (lk_State *S, lk_MemPool *mpool) {
 struct lk_Data { size_t len; };
 
 LK_API lk_Data *lk_newstring (lk_State *S, const char *s)
-{ return lk_newdata(S, s, strlen(s)); }
+{ return lk_newdata(S, s, strlen(s)+1); }
+
+LK_API size_t lk_len (lk_Data *data)
+{ return data ? data[-1].len : 0; }
 
 LK_API lk_Data *lk_newdata (lk_State *S, const char *s, size_t len) {
-    size_t rawlen = sizeof(lk_Data) + len + 1;
+    size_t rawlen = sizeof(lk_Data) + len;
     lk_Data *ls;
     char *buff;
     if (rawlen <= LK_SMALLSTRING_LEN) {
@@ -640,8 +638,7 @@ LK_API lk_Data *lk_newdata (lk_State *S, const char *s, size_t len) {
         ls->len = rawlen;
     }
     buff = (char*)(ls + 1);
-    memcpy(buff, s, len);
-    buff[len] = '\0';
+    if (s) memcpy(buff, s, len);
     return (lk_Data*)buff;
 }
 
@@ -673,7 +670,9 @@ LK_API char *lk_strcpy (char *dst, const char *s, size_t len) {
 
 /* buffer routines */
 
-#if defined(_WIN32) && !defined(__MINGW32__)
+#if !defined(_WIN32) || defined(__MINGW32__)
+# define c99_vsnprintf vsnprintf
+#else
 static int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap) {
     int count = -1;
     if (size != 0)
@@ -682,8 +681,6 @@ static int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list 
         count = _vscprintf(format, ap);
     return count;
 }
-#else
-# define c99_vsnprintf vsnprintf
 #endif
 
 LK_API void lk_initbuffer (lk_State *S, lk_Buffer *B) {
@@ -767,37 +764,47 @@ LK_API lk_Data *lk_buffresult (lk_Buffer *B) {
 
 /* hashtable routines */
 
-static size_t lkH_hashsize (size_t len) {
+#define lk_offset(lhs, rhs) ((char*)(lhs) - (char*)(rhs))
+#define lk_index(lhs, rhs)  ((lk_Entry*)((char*)(lhs) + (rhs)))
+
+LK_API void lk_inittable (lk_Table *t, size_t entry_size)
+{ memset(t, 0, sizeof(*t)); t->entry_size = entry_size; }
+
+static size_t lkH_hashsize (lk_Table *t, size_t len) {
     size_t newsize = LK_MIN_HASHSIZE;
-    while (newsize < LK_MAX_SIZET/2 && newsize < len)
+    const size_t maxsize = LK_MAX_SIZET/2/t->entry_size;
+    while (newsize < maxsize && newsize < len)
         newsize <<= 1;
-    return newsize;
+    assert(newsize < maxsize);
+    return newsize < maxsize ? newsize : 0;
 }
 
 static size_t lkH_countsize (lk_Table *t) {
-    size_t i, count = 0;
-    for (i = 0; i < t->size; ++i) {
-        if (t->hash[i].key != NULL)
-            ++count;
+    size_t i, size = t->size * t->entry_size;
+    size_t count = 0;
+    for (i = 0; i < size; i += t->entry_size) {
+        lk_Entry *e = lk_index(t->hash, i);
+        if (e->key != NULL) ++count;
     }
     return count;
 }
 
-static lk_Entry *lkH_mainposition (lk_Table *t, lk_Entry *entry) {
+static lk_Entry *lkH_mainposition (lk_Table *t, unsigned hash) {
     assert((t->size & (t->size - 1)) == 0);
-    return &t->hash[entry->hash & (t->size - 1)];
+    return lk_index(t->hash, (hash & (t->size - 1))*t->entry_size);
 }
 
 static lk_Entry *lkH_newkey (lk_State *S, lk_Table *t, lk_Entry *entry) {
     lk_Entry *mp;
-    if (t->size == 0 && lk_resizetable(S, t, LK_MIN_HASHSIZE) == 0) 
+    if (entry->key == NULL
+            || (t->size == 0 && lk_resizetable(S, t, LK_MIN_HASHSIZE) == 0))
         return NULL;
 redo:
-    mp = lkH_mainposition(t, entry);
+    mp = lkH_mainposition(t, entry->hash);
     if (mp->key != NULL) {
         lk_Entry *f = NULL, *othern;
         while (t->lastfree > 0) {
-            lk_Entry *e = &t->hash[--t->lastfree];
+            lk_Entry *e = lk_index(t->hash, t->lastfree -= t->entry_size);
             if (e->key == NULL && e->next == 0)  { f = e; break; }
         }
         if (f == NULL) {
@@ -805,29 +812,28 @@ redo:
                 return NULL;
             goto redo; /* return lkH_newkey(t, entry); */
         }
-        assert(f->hash == 0);
-        othern = lkH_mainposition(t, mp);
+        othern = lkH_mainposition(t, mp->hash);
         if (othern != mp) {
-            while (othern + othern->next != mp)
-                othern += othern->next;
-            othern->next = f - othern;
-            *f = *mp;
+            lk_Entry *next;
+            while ((next = lk_index(othern, othern->next)) != mp)
+                othern = next;
+            othern->next = lk_offset(f, othern);
+            memcpy(f, mp, t->entry_size);
             if (mp->next != 0) {
-                f->next += mp - f;
+                f->next += lk_offset(mp, f);
                 mp->next = 0;
             }
         }
         else {
             if (mp->next != 0)
-                f->next = (mp + mp->next) - f;
+                f->next = lk_offset(mp, f) + mp->next;
             else assert(f->next == 0);
-            mp->next = f - mp;
+            mp->next = lk_offset(f, mp);
             mp = f;
         }
     }
-    mp->key   = entry->key;
-    mp->hash  = entry->hash;
-    mp->value = entry->value;
+    mp->key  = entry->key;
+    mp->hash = entry->hash;
     return mp;
 }
 
@@ -840,67 +846,65 @@ static unsigned lkH_calchash (const char *s, size_t len) {
     return h;
 }
 
-LK_API void lk_inittable (lk_Table *t) {
-    t->size = t->lastfree = 0;
-    t->hash = NULL;
-}
-
 LK_API void lk_freetable (lk_State *S, lk_Table *t) {
-    if (t->hash != NULL)
-        lk_free(S, t->hash, t->size*sizeof(lk_Entry));
-    lk_inittable(t);
+    lk_free(S, t->hash, t->size*t->entry_size);
+    lk_inittable(t, t->entry_size);
 }
 
 LK_API size_t lk_resizetable (lk_State *S, lk_Table *t, size_t len) {
-    size_t i;
-    lk_Table new_map;
-    new_map.size = lkH_hashsize(len);
-    new_map.hash = (lk_Entry*)lk_malloc(S, new_map.size*sizeof(lk_Entry));
-    new_map.lastfree = new_map.size;
-    memset(new_map.hash, 0, sizeof(lk_Entry)*new_map.size);
-    for (i = 0; i < t->size; ++i) {
-        if (t->hash[i].key != NULL)
-            lkH_newkey(S, &new_map, &t->hash[i]);
+    size_t i, size = t->size*t->entry_size;
+    lk_Table nt = *t;
+    nt.size = lkH_hashsize(t, len);
+    if (nt.size == 0) return 0;
+    nt.lastfree = nt.size*nt.entry_size;
+    nt.hash = (lk_Entry*)lk_malloc(S, nt.lastfree);
+    memset(nt.hash, 0, nt.lastfree);
+    for (i = 0; i < size; i += t->entry_size) {
+        lk_Entry *olde = lk_index(t->hash, i);
+        lk_Entry *newe = lkH_newkey(S, &nt, olde);
+        assert(newe != NULL);
+        if (newe != NULL && t->entry_size > sizeof(lk_Entry))
+            memcpy(newe + 1, olde + 1, t->entry_size - sizeof(lk_Entry));
     }
-    if (t->size != 0)
-        lk_free(S, t->hash, t->size * sizeof(lk_Entry));
-    *t = new_map;
+    lk_free(S, t->hash, size);
+    *t = nt;
     return t->size;
 }
 
-LK_API lk_Entry *lk_getentry (lk_State *S, lk_Table *t, const char *key) {
+LK_API lk_Entry *lk_gettable (lk_Table *t, const char *key) {
     unsigned hash;
     lk_Entry *e;
-    (void)S;
     if (t->size == 0 || key == NULL) return NULL;
     hash = lkH_calchash(key, strlen(key));
-    assert((t->size & (t->size - 1)) == 0);
-    e = &t->hash[hash & (t->size - 1)];
-    while (1) {
+    e = lkH_mainposition(t, hash);
+    for (;;) {
         int next = e->next;
         if (e->hash == hash && e->key && strcmp(e->key, key) == 0)
             return e;
         if (next == 0) return NULL;
-        e += next;
+        e = lk_index(e, next);
     }
-    return NULL;
 }
 
-LK_API lk_Entry *lk_setentry (lk_State *S, lk_Table *t, const char *key) {
+LK_API lk_Entry *lk_settable (lk_State *S, lk_Table *t, const char *key) {
     lk_Entry e, *ret;
     if (key == NULL) return NULL;
-    if ((ret = lk_getentry(S, t, key)) != NULL)
+    if ((ret = lk_gettable(t, key)) != NULL)
         return ret;
-    e.key       = key;
-    e.hash      = lkH_calchash(key, strlen(key));
-    e.value.num = 0;
-    return lkH_newkey(S, t, &e);
+    e.key  = key;
+    e.hash = lkH_calchash(key, strlen(key));
+    if ((ret = lkH_newkey(S, t, &e)) == NULL)
+        return NULL;
+    if (t->entry_size > sizeof(lk_Entry))
+        memset(ret + 1, 0, t->entry_size - sizeof(lk_Entry));
+    return ret;
 }
 
 LK_API int lk_nextentry (lk_Table *t, lk_Entry **pentry) {
-    size_t i = *pentry ? *pentry - &t->hash[0] + 1 : 0;
-    for (; i < t->size; ++i) {
-        lk_Entry *e = &t->hash[i];
+    size_t i = *pentry ? lk_offset(*pentry, t->hash) + t->entry_size : 0;
+    const size_t size = t->size * t->entry_size;
+    for (; i < size; i += t->entry_size) {
+        lk_Entry *e = lk_index(t->hash, i);
         if (e->key != NULL) { *pentry = e; return 1; }
     }
     *pentry = NULL;
@@ -1150,11 +1154,11 @@ LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
 
 static void lkS_active (lk_State *S, lk_Service *svr, int sig);
 
-LK_API const char *lk_name    (lk_Slot *slot) { return slot->name;    }
-LK_API lk_Service *lk_service (lk_Slot *slot) { return slot->service; }
-LK_API lk_State   *lk_state   (lk_Slot *slot) { return slot->S;       }
-LK_API void       *lk_data    (lk_Slot *slot) { return slot->data;    }
-LK_API lk_Handler *lk_slothandler (lk_Slot *slot) { return slot->handler; }
+LK_API const char *lk_name        (lk_Slot *slot) { return slot ? slot->name    : NULL; }
+LK_API lk_Service *lk_service     (lk_Slot *slot) { return slot ? slot->service : NULL; }
+LK_API lk_State   *lk_state       (lk_Slot *slot) { return slot ? slot->S       : NULL; }
+LK_API void       *lk_data        (lk_Slot *slot) { return slot ? slot->data    : NULL; }
+LK_API lk_Handler *lk_slothandler (lk_Slot *slot) { return slot ? slot->handler : NULL; }
 
 LK_API lk_Slot *lk_current (lk_State *S)
 { lk_Context *ctx = lk_context(S); return ctx ? ctx->current : &S->root.slot; }
@@ -1166,7 +1170,7 @@ LK_API void lk_setslothandler (lk_Slot *slot, lk_Handler *h)
 { slot->handler = h; }
 
 LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const char *s)
-{ return lk_emitdata(slot, type, session, s, strlen(s)); }
+{ return lk_emitdata(slot, type, session, s, strlen(s)+1); }
 
 static const char *lkE_name (lk_Service *svr, lk_Buffer *B, const char *name) {
     lk_State *S = svr->slot.S;
@@ -1201,7 +1205,7 @@ static lk_Slot *lkE_new (lk_State *S, size_t sz, const char *name) {
 }
 
 static lk_Slot *lkE_register (lk_State *S, lk_Slot *slot) {
-    lk_Entry *e = lk_setentry(S, &S->slot_names, slot->name);
+    lk_Entry *e = lk_settable(S, &S->slot_names, slot->name);
     if ((lk_Slot*)e->key != slot) {
         if (&slot->service->slot == slot)
             lk_freelock(slot->service->lock);
@@ -1262,7 +1266,7 @@ static lk_Slot *lkE_findslotG (lk_State *S, const char *name) {
     lk_Slot *slot = NULL;
     lk_Entry *e;
     lk_lock(S->lock);
-    e = lk_getentry(S, &S->slot_names, name);
+    e = lk_gettable(&S->slot_names, name);
     if (e != NULL) slot = (lk_Slot*)e->key;
     lk_unlock(S->lock);
     return slot;
@@ -1418,7 +1422,7 @@ static void lkS_freeslotsG (lk_State *S, lk_Service *svr) {
     lk_lock(S->pool_lock);
     while (svr->slots != NULL) {
         lk_Slot *next = svr->slots->next;
-        lk_Entry *e = lk_getentry(S, &S->slot_names, svr->slots->name);
+        lk_Entry *e = lk_gettable(&S->slot_names, svr->slots->name);
         assert(e && (lk_Slot*)e->key == svr->slots);
         if (!svr->slots->is_svr)
             lk_poolfree(&S->slots, svr->slots);
@@ -1429,7 +1433,7 @@ static void lkS_freeslotsG (lk_State *S, lk_Service *svr) {
     polls = svr->polls;
     while (svr->polls != NULL) {
         lk_Slot *next = svr->polls->next;
-        lk_Entry *e = lk_getentry(S, &S->slot_names, svr->polls->name);
+        lk_Entry *e = lk_gettable(&S->slot_names, svr->polls->name);
         assert(e && (lk_Slot*)e->key == svr->polls);
         e->key = NULL;
         svr->polls = next;
@@ -1687,12 +1691,12 @@ static void lkG_delstate (lk_State *S) {
     }
     while (lk_nextentry(&S->config, &e))
         lk_deldata(S, (lk_Data*)e->key);
-    lk_freemempool(S, &S->cleanups);
-    lk_freemempool(S, &S->signals);
-    lk_freemempool(S, &S->smallstrings);
-    lk_freemempool(S, &S->services);
-    lk_freemempool(S, &S->slots);
-    lk_freemempool(S, &S->polls);
+    lk_freepool(S, &S->cleanups);
+    lk_freepool(S, &S->signals);
+    lk_freepool(S, &S->smallstrings);
+    lk_freepool(S, &S->services);
+    lk_freepool(S, &S->slots);
+    lk_freepool(S, &S->polls);
     lk_freetable(S, &S->config);
     lk_freetable(S, &S->slot_names);
     for (i = 0; i < S->nthreads; ++i)
@@ -1705,7 +1709,7 @@ static void lkG_delstate (lk_State *S) {
     S->allocf(S->alloc_ud, S, 0, sizeof(lk_State));
 }
 
-static void *default_allocf(void *ud, void *ptr, size_t size, size_t osize) {
+static void *default_allocf (void *ud, void *ptr, size_t size, size_t osize) {
     (void)ud, (void)osize;
     if (size == 0) { free(ptr); return NULL; }
     return realloc(ptr, size);
@@ -1727,14 +1731,15 @@ LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud) {
     if (!lk_initlock(&S->config_lock))  goto err_configlock;
     if (!lk_initlock(&S->pool_lock))    goto err_poollock;
     if (!lkG_initroot(S, name))         goto err;
-    lk_initmempool(&S->cleanups, sizeof(lk_Cleanup));
-    lk_initmempool(&S->signals, sizeof(lk_SignalNode));
-    lk_initmempool(&S->smallstrings, LK_SMALLSTRING_LEN);
-    lk_initmempool(&S->services, sizeof(lk_Service));
-    lk_initmempool(&S->slots, sizeof(lk_Slot));
-    lk_initmempool(&S->polls, sizeof(lk_Poll));
-    lk_inittable(&S->slot_names);
-    lk_setentry(S, &S->slot_names, S->root.slot.name);
+    lk_initpool(&S->cleanups, sizeof(lk_Cleanup));
+    lk_initpool(&S->signals, sizeof(lk_SignalNode));
+    lk_initpool(&S->smallstrings, LK_SMALLSTRING_LEN);
+    lk_initpool(&S->services, sizeof(lk_Service));
+    lk_initpool(&S->slots, sizeof(lk_Slot));
+    lk_initpool(&S->polls, sizeof(lk_Poll));
+    lk_inittable(&S->config, sizeof(lk_PtrEntry));
+    lk_inittable(&S->slot_names, sizeof(lk_Entry));
+    lk_settable(S, &S->slot_names, S->root.slot.name);
     return S;
 err:            lk_freelock(S->pool_lock);
 err_poollock:   lk_freelock(S->config_lock);
@@ -1783,41 +1788,38 @@ LK_API int lk_start (lk_State *S, int threads) {
 }
 
 LK_API char *lk_getconfig (lk_State *S, const char *key) {
-    lk_Entry *e;
+    lk_PtrEntry *e;
     char *value = NULL;
     lk_lock(S->config_lock);
-    if ((e = lk_getentry(S, &S->config, key)) != NULL)
-        value = (char*)lk_newstring(S, e->value.ptr);
+    if ((e = (lk_PtrEntry*)lk_gettable(&S->config, key)) != NULL)
+        value = (char*)lk_newstring(S, (const char*)e->data);
     lk_unlock(S->config_lock);
     return value;
 }
 
 LK_API void lk_setconfig (lk_State *S, const char *key, const char *value) {
-    lk_Buffer B;
-    lk_Entry *e;
+    lk_PtrEntry *e;
+    char *data;
     size_t ksize, vsize;
     assert(key != NULL);
     lk_lock(S->config_lock);
     if (value == NULL) {
-        e = lk_getentry(S, &S->config, key);
-        if (e) lk_deldata(S, (void*)e->key), e->key = NULL;
+        e = (lk_PtrEntry*)lk_gettable(&S->config, key);
+        if (e) lk_deldata(S, (lk_Data*)lk_key(e)), lk_key(e) = NULL;
         goto out;
     }
-    e = lk_setentry(S, &S->config, key);
+    e = (lk_PtrEntry*)lk_settable(S, &S->config, key);
     ksize = strlen(key);
     vsize = strlen(value);
-    if (e->value.ptr && strlen(e->value.ptr) >= vsize) {
-        memcpy(e->value.ptr, value, vsize+1);
+    if (e->data && strlen(e->data) >= vsize) {
+        memcpy(e->data, value, vsize+1);
         goto out;
     }
-    lk_initbuffer(S, &B);
-    lk_addlstring(&B, key, ksize);
-    lk_addchar(&B, '\0');
-    lk_addlstring(&B, value, vsize);
-    lk_addchar(&B, '\0');
-    lk_deldata(S, (lk_Data*)e->key);
-    e->key = (char*)lk_buffresult(&B);
-    e->value.ptr = (char*)(e->key + ksize + 1);
+    data = (char*)lk_newdata(S, NULL, ksize+vsize+2);
+    lk_key(e) = data;
+    e->data = data + ksize + 1;
+    memcpy(data, key, ksize+1);
+    memcpy(e->data, value, vsize+1);
 out: lk_unlock(S->config_lock);
 }
 
