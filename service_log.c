@@ -1,5 +1,6 @@
 #define LOKI_MODULE
 #include "loki_services.h"
+#include "lk_buffer.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -37,27 +38,27 @@ typedef enum lk_ConfigMaskFlag {
 } lk_ConfigMaskFlag;
 
 typedef struct lk_Dumper {
-    char   name[LK_MAX_CONFIGPATH];
-    int    index;
-    int    interval;
-    time_t next_update;
-    FILE  *fp;
+    char     name[LK_MAX_CONFIGPATH];
+    unsigned index    : 8;
+    unsigned interval : 24;
+    time_t   next_update;
+    FILE    *fp;
 } lk_Dumper;
 
 typedef struct lk_LogConfig {
     char name[LK_MAX_CONFIGNAME];
     char filepath[LK_MAX_CONFIGPATH];
-    unsigned mask;
-    int color; /* 1248:RGBI, low 4bit: fg, high 4bit: bg */
-    int screen;
-    int interval;
+    unsigned mask     : 8;
+    unsigned color    : 8; /* 1248:RGBI, low 4bit: fg, high 4bit: bg */
+    unsigned screen   : 1;
+    unsigned interval : 24;
     lk_Dumper *dumper;
 } lk_LogConfig;
 
 typedef struct lk_LogState {
-    lk_State *S;
-    lk_Table  config;
-    lk_Table  dump;
+    lk_State   *S;
+    lk_Table   config;
+    lk_Table   dump;
     lk_MemPool configs;
     lk_MemPool dumpers;
 } lk_LogState;
@@ -206,6 +207,8 @@ static lk_LogConfig* lkX_getconfig(lk_LogState *ls, const char *name) {
         lkX_readinteger(ls, &buff, config, screen);
         lkX_readinteger(ls, &buff, config, interval);
         lkX_readstring(ls,  &buff, config, filepath);
+        if (config->interval > 60 * 60 * 24)
+            config->interval = 60 * 60 * 24;
         lk_freebuffer(&buff);
     }
     return config;
@@ -376,6 +379,7 @@ static lk_LogState *lkX_newstate(lk_State *S) {
     lk_initpool(&ls->dumpers, sizeof(lk_Dumper));
 
     /* initialize config */
+    lk_resizetable(S, &ls->config, 32);
     config = lkX_newconfig(ls, "info");
     config->screen = 1;
     config->color = 0x07;
@@ -423,7 +427,7 @@ static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     }
     while (lk_nextentry(&ls->dump, &e)) {
         lk_Dumper *dumper = (lk_Dumper*)e->key;
-        if (dumper->fp) fclose(dumper->fp);
+        if (dumper && dumper->fp) fclose(dumper->fp);
         lk_poolfree(&ls->dumpers, dumper);
         e->key = NULL;
     }
@@ -441,10 +445,8 @@ LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     }
     else if (!sig)
         lkX_delstate(ls);
-    else if (sig->data && sig->size > 0) {
-        size_t size = sig->size - (((char*)sig->data)[sig->size-1] == '\0');
-        lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, size);
-    }
+    else
+        lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, sig->size);
     return LK_OK;
 }
 

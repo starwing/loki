@@ -23,18 +23,18 @@
 #define lkX_getcached(var,type) type *var;  do { \
     lk_lock(zs->lock);                           \
     if ((var = zs->freed_##var##s) != NULL)      \
-        lkL_remove(var);                         \
+        znL_remove(var);                         \
     else {                                       \
         var = (type*)lk_malloc(zs->S, sizeof(type)); \
         memset(var, 0, sizeof(*var));            \
         var->zs = zs; }                          \
-    lkL_insert(&zs->var##s, var);                \
+    znL_insert(&zs->var##s, var);                \
     lk_unlock(zs->lock);                       } while (0)
 
 #define lkX_putcached(var)                  do { \
     lk_lock(zs->lock);                           \
-    lkL_remove(var);                             \
-    lkL_insert(&zs->freed_##var##s, var);        \
+    znL_remove(var);                             \
+    znL_insert(&zs->freed_##var##s, var);        \
     lk_unlock(zs->lock);                       } while (0)
 
 typedef struct lk_ZNetState {
@@ -108,7 +108,7 @@ struct lk_Accept {
 };
 
 struct lk_Tcp {
-    lkL_entry(lk_Tcp);
+    znL_entry(lk_Tcp);
     lk_ZNetState *zs;
     lk_Service *service;
     lk_RecvHandlers *handlers;
@@ -122,7 +122,7 @@ struct lk_Tcp {
 };
 
 struct lk_Udp {
-    lkL_entry(lk_Udp);
+    znL_entry(lk_Udp);
     lk_ZNetState *zs;
     lk_Service *service;
     lk_RecvHandlers *handlers;
@@ -196,10 +196,10 @@ static void lkX_postdeletor (void *ud, zn_State *S) {
     lk_freepool(zs->S, &zs->cmds);
     lk_freepool(zs->S, &zs->accepts);
     lk_freepool(zs->S, &zs->handlers);
-    lkL_apply(zs->tcps, lk_Tcp, lk_free(zs->S, cur, sizeof(lk_Tcp)));
-    lkL_apply(zs->freed_tcps, lk_Tcp, lk_free(zs->S, cur, sizeof(lk_Tcp)));
-    lkL_apply(zs->udps, lk_Udp, lk_free(zs->S, cur, sizeof(lk_Udp)));
-    lkL_apply(zs->freed_udps, lk_Udp, lk_free(zs->S, cur, sizeof(lk_Udp)));
+    znL_apply(lk_Tcp, &zs->tcps, lk_free(zs->S, cur, sizeof(lk_Tcp)));
+    znL_apply(lk_Tcp, &zs->freed_tcps, lk_free(zs->S, cur, sizeof(lk_Tcp)));
+    znL_apply(lk_Udp, &zs->udps, lk_free(zs->S, cur, sizeof(lk_Udp)));
+    znL_apply(lk_Udp, &zs->freed_udps, lk_free(zs->S, cur, sizeof(lk_Udp)));
 }
 
 
