@@ -32,9 +32,8 @@ typedef struct lk_LogHeader {
 typedef enum lk_ConfigMaskFlag {
     lk_Mreload   = 1 << 0,
     lk_Mcolor    = 1 << 1,
-    lk_Mscreen   = 1 << 2,
-    lk_Minterval = 1 << 3,
-    lk_Mfilepath = 1 << 4
+    lk_Minterval = 1 << 2,
+    lk_Mfilepath = 1 << 3
 } lk_ConfigMaskFlag;
 
 typedef struct lk_Dumper {
@@ -50,7 +49,6 @@ typedef struct lk_LogConfig {
     char filepath[LK_MAX_CONFIGPATH];
     unsigned mask     : 8;
     unsigned color    : 8; /* 1248:RGBI, low 4bit: fg, high 4bit: bg */
-    unsigned screen   : 1;
     unsigned interval : 24;
     lk_Dumper *dumper;
 } lk_LogConfig;
@@ -204,7 +202,6 @@ static lk_LogConfig* lkX_getconfig(lk_LogState *ls, const char *name) {
         lk_Buffer buff;
         lk_initbuffer(ls->S, &buff);
         lkX_readinteger(ls, &buff, config, color);
-        lkX_readinteger(ls, &buff, config, screen);
         lkX_readinteger(ls, &buff, config, interval);
         lkX_readstring(ls,  &buff, config, filepath);
         if (config->interval > 60 * 60 * 24)
@@ -217,7 +214,6 @@ static lk_LogConfig* lkX_getconfig(lk_LogState *ls, const char *name) {
 static int lkX_mergeconfig(lk_LogConfig *c1, lk_LogConfig *c2) {
     if (c1 == NULL || c2 == NULL) return -1;
     if (c2->mask & lk_Mcolor)    c1->color = c2->color;
-    if (c2->mask & lk_Mscreen)   c1->screen = c2->screen;
     if (c2->mask & lk_Minterval) c1->interval = c2->interval;
     if (c2->mask & lk_Mfilepath) lk_strcpy(c1->filepath, c2->filepath, LK_MAX_CONFIGPATH);
     c1->mask |= c2->mask;
@@ -228,7 +224,6 @@ static lk_LogConfig* lkX_setconfig(lk_LogState *ls, lk_LogHeader *hs) {
     lk_LogConfig *config = lkX_getconfig(ls, hs->key);
     if (config->mask & lk_Mreload) {
         lk_LogConfig *other = lkX_getconfig(ls, hs->level);
-        config->screen = 1;
         if (other->mask != lk_Mreload)
             lkX_mergeconfig(config, other);
         other = lkX_getconfig(ls, hs->service);
@@ -358,7 +353,7 @@ static int lkX_writelog(lk_LogState *ls, const char* service_name, char* s, size
     lkX_localtime(time(NULL), &hs.tm);
     if (config->dumper)
         lkX_filedump(ls, &hs, config->dumper);
-    if (config->screen) {
+    if (config->color != 0) {
         lkX_headerdump(ls, &hs, stdout);
         lkX_screendump(ls, hs.msg, hs.msglen, config->color);
     }
@@ -381,25 +376,20 @@ static lk_LogState *lkX_newstate(lk_State *S) {
     /* initialize config */
     lk_resizetable(S, &ls->config, 32);
     config = lkX_newconfig(ls, "info");
-    config->screen = 1;
     config->color = 0x07;
-    config->mask = lk_Mscreen|lk_Mcolor;
+    config->mask = lk_Mcolor;
     config = lkX_newconfig(ls, "trace");
-    config->screen = 1;
     config->color = 0x0F;
-    config->mask = lk_Mscreen|lk_Mcolor;
+    config->mask = lk_Mcolor;
     config = lkX_newconfig(ls, "verbose");
-    config->screen = 1;
     config->color = 0x70;
-    config->mask = lk_Mscreen|lk_Mcolor;
+    config->mask = lk_Mcolor;
     config = lkX_newconfig(ls, "warning");
-    config->screen = 1;
     config->color = 0x0B;
-    config->mask = lk_Mscreen|lk_Mcolor;
+    config->mask = lk_Mcolor;
     config = lkX_newconfig(ls, "error");
-    config->screen = 1;
     config->color = 0x9F;
-    config->mask = lk_Mscreen|lk_Mcolor;
+    config->mask = lk_Mcolor;
     config = lkX_newconfig(ls, "default_service");
     lk_strcpy(config->filepath, LK_DEFAULT_LOGPATH, LK_MAX_CONFIGPATH);
     config->interval = 3600;

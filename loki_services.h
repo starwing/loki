@@ -113,3 +113,7 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,
 
 #endif /* loki_services_h */
 
+/* win32cc: flags+='-s -mdll -O2 -xc' output='loki.dll'
+ * unixcc: flags+='-shared -O2 -xc' output='loki.so'
+ * cc: input+='service_*.c lokilib.c' */
+

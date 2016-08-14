@@ -113,7 +113,6 @@ LK_API lk_Slot *lk_slot    (lk_State *S, const char *name);
 LK_API lk_Slot *lk_current (lk_State *S);
 
 LK_API int lk_emit       (lk_Slot *slot, const lk_Signal *sig);
-LK_API int lk_emitdata   (lk_Slot *slot, unsigned type, unsigned session, const void *data, size_t size);
 LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const char *s);
 
 LK_API lk_Slot *lk_newpoll (lk_State *S, const char *name, lk_Handler *h, void *data);
@@ -177,6 +176,8 @@ LK_API lk_Data *lk_newstring   (lk_State *S, const char *s);
 LK_API lk_Data *lk_newlstring  (lk_State *S, const char *s, size_t len);
 LK_API lk_Data *lk_newvfstring (lk_State *S, const char *fmt, va_list l);
 LK_API lk_Data *lk_newfstring  (lk_State *S, const char *fmt, ...);
+
+LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, lk_Data *data);
 
 LK_API char *lk_strcpy    (char *buff, const char *s, size_t len);
 LK_API int   lk_vsnprintf (char *buff, size_t size, const char *fmt, va_list l);
@@ -1102,12 +1103,9 @@ static lk_Slot *lkE_register (lk_State *S, lk_Slot *slot) {
         if (&slot->service->slot == slot)
             lk_freelock(slot->service->lock);
         lk_lock(S->pool_lock);
-        if (slot->is_svr)
-            lk_poolfree(&S->services, slot);
-        else if (slot->is_poll)
-            lk_poolfree(&S->polls, slot);
-        else
-            lk_poolfree(&S->slots, slot);
+        if (slot->is_svr)       lk_poolfree(&S->services, slot);
+        else if (slot->is_poll) lk_poolfree(&S->polls, slot);
+        else                    lk_poolfree(&S->slots, slot);
         lk_unlock(S->pool_lock);
         return NULL;
     }
@@ -1292,8 +1290,8 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
 
 LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const char *s) {
     lk_Signal sig = LK_SIGNAL;
-    sig.free = 1;
-    sig.type = type;
+    sig.free    = 1;
+    sig.type    = type;
     sig.session = session;
     if (slot) {
         sig.data = lk_newstring(slot->S, s);
@@ -1302,14 +1300,14 @@ LK_API int lk_emitstring (lk_Slot *slot, unsigned type, unsigned session, const 
     return lk_emit(slot, &sig);
 }
 
-LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, const void *data, size_t size) {
+LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, lk_Data *data) {
     lk_Signal sig = LK_SIGNAL;
-    sig.free = 1;
-    sig.type = type;
+    sig.free    = 1;
+    sig.type    = type;
     sig.session = session;
-    if (slot && size != 0) {
-        sig.size = size;
-        sig.data = lk_newlstring(slot->S, data, size);
+    if (slot && data) {
+        sig.size = lk_len(data);
+        sig.data = data;
     }
     return lk_emit(slot, &sig);
 }
