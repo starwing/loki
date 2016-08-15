@@ -84,8 +84,7 @@ typedef struct lk_PostCmd {
         lk_ConnectHandler *on_connect;
         lk_UdpBindHandler *on_udpbind;
     } h;
-    void  *data;
-    size_t size;
+    lk_Data *data;
     lk_PostCmdType cmd;
     zn_PeerInfo info;
 } lk_PostCmd;
@@ -164,12 +163,6 @@ static lk_RecvHandlers *lkX_gethandlers(lk_ZNetState *zs, lk_Service *svr) {
     if (e) hs = (lk_RecvHandlers*)e->handlers;
     lk_unlock(zs->lock);
     return hs;
-}
-
-static void lkX_copydata (lk_PostCmd *cmd, const char *buff, size_t size) {
-    cmd->data = lk_malloc(cmd->zs->S, size);
-    cmd->size = size;
-    memcpy(cmd->data, buff, size);
 }
 
 static void lkX_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
@@ -452,10 +445,11 @@ static void lkX_poster (void *ud, zn_State *S) {
     case LK_CMD_TCP_SEND: {
         lk_Tcp *tcp = cmd->u.tcp;
         int ret = ZN_OK;
-        if (tcp->tcp && zn_sendprepare(&tcp->send, (char*)cmd->data, cmd->size))
+        size_t size = lk_len(cmd->data);
+        if (tcp->tcp && zn_sendprepare(&tcp->send, (char*)cmd->data, size))
             ret = zn_send(tcp->tcp, zn_sendbuff(&tcp->send), zn_sendsize(&tcp->send),
                         lkX_onsend, tcp);
-        lk_free(zs->S, cmd->data, cmd->size);
+        lk_deldata(zs->S, cmd->data);
         if (ret != ZN_OK) {
             lk_log(zs->S, "E[send]" lk_loc("[%p] %s"), tcp, zn_strerror(ret));
             lkX_deltcp(tcp);
@@ -488,9 +482,10 @@ static void lkX_poster (void *ud, zn_State *S) {
     } break;
     case LK_CMD_UDP_SENDTO: {
         lk_Udp *udp = cmd->u.udp;
-        int ret = zn_sendto(udp->udp, (char*)cmd->data, cmd->size,
+        size_t size = lk_len(cmd->data);
+        int ret = zn_sendto(udp->udp, (char*)cmd->data, size,
                   cmd->info.addr, cmd->info.port);
-        lk_free(zs->S, cmd->data, cmd->size);
+        lk_deldata(zs->S, cmd->data);
         if (ret != ZN_OK) {
             lk_log(zs->S, "W[sendto]" lk_loc("[%p] %s"), udp, zn_strerror(ret));
             zn_deludp(udp->udp);
@@ -698,7 +693,7 @@ LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size) {
     cmd->service = lk_self(zs->S);
     cmd->cmd = LK_CMD_TCP_SEND;
     cmd->u.tcp = tcp;
-    lkX_copydata(cmd, buff, size);
+    cmd->data = lk_newlstring(zs->S, buff, size);
     lkX_post(cmd);
 }
 
@@ -728,7 +723,7 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned size, const char 
     cmd->service = lk_self(zs->S);
     cmd->cmd = LK_CMD_UDP_SENDTO;
     cmd->u.udp = udp;
-    lkX_copydata(cmd, buff, size);
+    cmd->data = lk_newlstring(zs->S, buff, size);
     lkX_copyinfo(cmd, addr, port);
     lkX_post(cmd);
 }

@@ -107,6 +107,33 @@ static void lkX_settime(lk_Dumper* dumper, int interval) {
     dumper->next_update = daytm + (dumper->index + 1) * interval;
 }
 
+static void lkX_createdirs(lk_State *S, const char *path) {
+    const char *i, *last;
+    lk_Buffer B;
+    lk_initbuffer(S, &B);
+    for (i = last = path; i != '\0'; last = ++i) {
+        while (*i != '\0' && *i != '/' && *i != '\\')
+            lk_addchar(&B, *i++);
+        if (*i == '\0') break;
+        switch (last - i) {
+        case 0: continue;
+        case 1: if (*last == '.') continue; break;
+        case 2: if (last[0] == '.' && last[1] == '.') continue; break;
+        }
+        lk_addchar(&B, '/');
+        *lk_prepbuffsize(&B, 1) = '\0';
+#if _WIN32
+        if (!CreateDirectoryA(lk_buffer(&B), NULL)
+                && GetLastError() != ERROR_ALREADY_EXISTS)
+            break;
+#else
+        if (mkdir(lk_buffer(&B), 0777) < 0 && errno != EEXIST)
+            break;
+#endif
+    }
+    lk_freebuffer(&B);
+}
+
 static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
     lk_Buffer buff;
     struct tm tm;
@@ -128,6 +155,7 @@ static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
         }
     }
     lk_addchar(&buff, '\0');
+    lkX_createdirs(ls->S, lk_buffer(&buff));
 #ifdef _MSC_VER
     fopen_s(&dumper->fp, lk_buffer(&buff), "a");
 #else
