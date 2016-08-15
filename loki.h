@@ -250,7 +250,7 @@ typedef HANDLE            lk_Thread;
 
 #define lk_initthread(t,f,ud) ((*(t)=(HANDLE)_beginthreadex(NULL,0,(f),(ud),0,NULL))!=NULL)
 #define lk_waitthread(t)  (WaitForSingleObject((t), INFINITE),(void)lk_freethread(t))
-#define lk_freethread(t)  (_endthreadex((uintptr_t)(t)), (void)CloseHandle(t))
+#define lk_freethread(t)  ((void)CloseHandle(t))
 
 #else /* POSIX systems */
 
@@ -1194,9 +1194,9 @@ static lk_Service *lkE_checkservice (lk_State *S, lk_Slot *slot, lk_Service *src
     if (S == NULL || src == NULL || dst == NULL) return NULL;
     if (dst->slot.S->status >= LK_STOPPING)
         return NULL; /*lk_log(S, "E[emit]" lk_loc("host is stopping"));*/
-    else if (src->status >= LK_STOPPING)
-        lk_log(S, "E[emit]" lk_loc("source service is stopping"));
-    else if (dst->status >= LK_STOPPING)
+    else if (src->status >= LK_STOPPING && (lk_Slot*)dst == S->logger)
+        return dst; /* lk_log(S, "E[emit]" lk_loc("source service is stopping")); */
+    else if (dst->status >= LK_STOPPING && (lk_Slot*)dst != S->logger)
         lk_log(S, "E[emit]" lk_loc("destination service is stopping"));
     else
         return dst;
@@ -1404,7 +1404,7 @@ static void lkS_callslot (lk_State *S, lk_SignalNode *node, lk_Context *ctx) {
     if (ret == LK_ERR && slot->handler)
         lk_try(S, ctx, slot->handler(S, slot, &node->data));
     if (node->data.free)
-        lk_deldata(S, node->data.data);
+        lk_deldata(S, (lk_Data*)node->data.data);
 }
 
 static void lkS_callslotsS (lk_State *S, lk_Service *svr) {
@@ -1725,7 +1725,7 @@ LK_API void lk_setconfig (lk_State *S, const char *key, const char *value) {
     e = (lk_PtrEntry*)lk_settable(S, &S->config, key);
     ksize = strlen(key);
     vsize = strlen(value);
-    if (e->data && strlen(e->data) >= vsize) {
+    if (e->data && strlen((const char*)e->data) >= vsize) {
         memcpy(e->data, value, vsize+1);
         goto out;
     }
@@ -1752,7 +1752,7 @@ LK_API int lk_vlog (lk_State *S, const char *fmt, va_list l) {
     if (!logger) return LK_OK;
     sig.free = 1;
     sig.data = lk_newvfstring(S, fmt, l);
-    sig.size = lk_len(sig.data);
+    sig.size = lk_len((lk_Data*)sig.data);
     return lk_emit(logger, &sig);
 }
 

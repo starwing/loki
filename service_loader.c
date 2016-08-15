@@ -2,6 +2,8 @@
 #include "loki_services.h"
 #include "lk_buffer.h"
 
+#include <stdlib.h>
+
 #ifdef __APPLE__
 # include <libproc.h>
 #endif
@@ -67,16 +69,38 @@ static lk_Data *lkP_getmodulename(lk_State *S) {
 
 static int lkP_readable(const char *path) {
 #ifdef _WIN32
-    HANDLE hFile = CreateFileA(path, /* file to open         */
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    int bytes = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    if (bytes != 0) {
+        WCHAR *wp = NULL;
+        wp = (WCHAR*)malloc(sizeof(WCHAR)*bytes);
+        if (wp != NULL) {
+            MultiByteToWideChar(CP_UTF8, 0, path, -1, wp, bytes);
+            hFile = CreateFileW(wp,        /* file to open         */
+                    FILE_WRITE_ATTRIBUTES, /* open only for handle */
+                    FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                    NULL,                  /* default security     */
+                    OPEN_EXISTING,         /* existing file only   */
+                    FILE_FLAG_BACKUP_SEMANTICS, /* open directory also */
+                    NULL);                 /* no attr. template    */
+            free(wp);
+            if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+            return hFile != INVALID_HANDLE_VALUE;
+        }
+    }
+    hFile = CreateFileA(path,      /* file to open         */
             FILE_WRITE_ATTRIBUTES, /* open only for handle */
-            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, /* share for everything */
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
             NULL,                  /* default security     */
             OPEN_EXISTING,         /* existing file only   */
             FILE_FLAG_BACKUP_SEMANTICS, /* open directory also */
             NULL);                 /* no attr. template    */
-    CloseHandle(hFile);
+    if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
     return hFile != INVALID_HANDLE_VALUE;
 #else
+    int fd = open(path, O_RDONLY|O_NOCTTY);
+    if (fd >= 0) close(fd);
+    return fd >= 0;
 #endif
 }
 
@@ -290,8 +314,7 @@ LKMOD_API int loki_service_loader (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_WEAK;
 }
 
-/* win32cc: flags+='-Wextra -pedantic -std=c89 -s -O3 -mdll' libs+='-lws2_32'
- * win32cc: input='lokilib.c service_*.c' output='loki.dll'
- * unixcc: flags+='-Wextra -s -O3 -fPIC -shared' libs+='-pthread -ldl'
- * unixcc: input='lokilib.c service_*.c' output='loki.so' */
+/* win32cc: flags+='-s -mdll -xc' output='loki.dll' libs+='-lws2_32'
+ * unixcc: flags+='-fPIC -shared -xc' output='loki.so'
+ * cc: flags+='-Wextra -O3' input='service_*.c lokilib.c' */
 

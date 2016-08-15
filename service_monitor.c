@@ -137,8 +137,7 @@ LKMOD_API int loki_service_monitor (lk_State *S, lk_Slot *slot, lk_Signal *sig) 
     return LK_OK;
 }
 
-/* win32cc: flags+='-Wextra -s -O3 -mdll' libs+='-lws2_32'
- * win32cc: input='lokilib.c service_*.c' output='loki.dll'
- * unixcc: flags+='-Wextra -s -O3 -fPIC -shared' libs+='-pthread -ldl'
- * unixcc: input='lokilib.c service_*.c' output='loki.so' */
+/* win32cc: flags+='-s -mdll -xc' output='loki.dll' libs+='-lws2_32'
+ * unixcc: flags+='-fPIC -shared -xc' output='loki.so'
+ * cc: flags+='-Wextra -O3' input='service_*.c lokilib.c' */
 
