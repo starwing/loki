@@ -17,7 +17,7 @@
 #endif
 
 #ifndef LK_DEFAULT_LOGPATH
-# define LK_DEFAULT_LOGPATH "logs/%S_%Y%M%D.%I.log"
+# define LK_DEFAULT_LOGPATH "logs/%Y-%M/%S_%Y-%M-%D-%I.log"
 #endif
 #define LK_MAX_CONFIGNAME  64
 #define LK_MAX_CONFIGPATH  256
@@ -149,13 +149,14 @@ static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
             lk_addchar(&B, *s);
             continue;
         }
-        switch (s[1]) {
-        case 'Y': lk_addfstring(&B, "%04d", tm.tm_year + 1900); break;
-        case 'M': lk_addfstring(&B, "%02d", tm.tm_mon + 1); break;
-        case 'D': lk_addfstring(&B, "%02d", tm.tm_mday); break;
-        case 'I': lk_addfstring(&B, "%d", dumper->index); break;
-        default:  lk_addchar(&B, '%'); /* FALLTHROUGH */
-        case '%': if (*s != '\0') lk_addchar(&B, *s++); break;
+        switch (*++s) {
+        case 'Y':  lk_addfstring(&B, "%04d", tm.tm_year + 1900); break;
+        case 'M':  lk_addfstring(&B, "%02d", tm.tm_mon + 1); break;
+        case 'D':  lk_addfstring(&B, "%02d", tm.tm_mday); break;
+        case 'I':  lk_addfstring(&B, "%d", dumper->index); break;
+        case '\0': lk_addchar(&B, '%'); --s; break;
+        default:   lk_addchar(&B, '%'); /* FALLTHROUGH */
+        case '%':  lk_addchar(&B, *s); break;
         }
     }
     lk_addchar(&B, '\0');
