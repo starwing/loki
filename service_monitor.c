@@ -1,7 +1,6 @@
 #define LOKI_MODULE
 #include "loki_services.h"
 
-
 #define lkX_getstate(svr) ((lk_MonitorState*)lk_data((lk_Slot*)(svr)))
 
 typedef lkQ_type(struct lk_MonitorNode) lk_MonitorList;

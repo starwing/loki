@@ -73,20 +73,20 @@ typedef enum lk_PostCmdType {
 
 typedef struct lk_PostCmd {
     lk_ZNetState *zs;
-    lk_Service *service;
+    lk_Service   *service;
+    void         *data;
     union {
         lk_Accept *accept;
-        lk_Tcp *tcp;
-        lk_Udp *udp;
+        lk_Tcp    *tcp;
+        lk_Udp    *udp;
     } u;
     union {
-        lk_AcceptHandler *on_accept;
+        lk_AcceptHandler  *on_accept;
         lk_ConnectHandler *on_connect;
         lk_UdpBindHandler *on_udpbind;
     } h;
-    lk_Data *data;
     lk_PostCmdType cmd;
-    zn_PeerInfo info;
+    zn_PeerInfo    info;
 } lk_PostCmd;
 
 typedef enum lk_SignalType {
@@ -445,11 +445,11 @@ static void lkX_poster (void *ud, zn_State *S) {
     case LK_CMD_TCP_SEND: {
         lk_Tcp *tcp = cmd->u.tcp;
         int ret = ZN_OK;
-        size_t size = lk_len(cmd->data);
+        size_t size = lk_len((lk_Data*)cmd->data);
         if (tcp->tcp && zn_sendprepare(&tcp->send, (char*)cmd->data, size))
             ret = zn_send(tcp->tcp, zn_sendbuff(&tcp->send), zn_sendsize(&tcp->send),
                         lkX_onsend, tcp);
-        lk_deldata(zs->S, cmd->data);
+        lk_deldata(zs->S, (lk_Data*)cmd->data);
         if (ret != ZN_OK) {
             lk_log(zs->S, "E[send]" lk_loc("[%p] %s"), tcp, zn_strerror(ret));
             lkX_deltcp(tcp);
@@ -482,10 +482,10 @@ static void lkX_poster (void *ud, zn_State *S) {
     } break;
     case LK_CMD_UDP_SENDTO: {
         lk_Udp *udp = cmd->u.udp;
-        size_t size = lk_len(cmd->data);
+        size_t size = lk_len((lk_Data*)cmd->data);
         int ret = zn_sendto(udp->udp, (char*)cmd->data, size,
                   cmd->info.addr, cmd->info.port);
-        lk_deldata(zs->S, cmd->data);
+        lk_deldata(zs->S, (lk_Data*)cmd->data);
         if (ret != ZN_OK) {
             lk_log(zs->S, "W[sendto]" lk_loc("[%p] %s"), udp, zn_strerror(ret));
             zn_deludp(udp->udp);

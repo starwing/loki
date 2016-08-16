@@ -2,6 +2,7 @@
 #include "loki_services.h"
 #include "lk_buffer.h"
 
+#include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,23 +65,23 @@ typedef struct lk_LogState {
     lk_MemPool dumpers;
 } lk_LogState;
 
-#define lkX_readinteger(ls, buff, config, key)    do { \
+#define lkX_readinteger(ls, B, config, key)    do { \
     char *s;                                           \
-    lk_resetbuffer(buff);                              \
-    lk_addfstring(buff, "log.%s." #key, config->name); \
+    lk_resetbuffer(B);                              \
+    lk_addfstring(B, "log.%s." #key, config->name); \
     config->mask &= ~lk_M##key;                        \
-    if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
+    if ((s = lk_getconfig(ls->S, lk_buffer(B)))) {  \
         config->key = atoi(s);                         \
         config->mask |= lk_M##key;                     \
         lk_deldata(ls->S, (lk_Data*)s); }          } while(0)
 
-#define lkX_readstring(ls, buff, config, key)     do { \
+#define lkX_readstring(ls, B, config, key)     do { \
     char *s;                                           \
-    lk_resetbuffer(buff);                              \
-    lk_addfstring(buff, "log.%s." #key, config->name); \
+    lk_resetbuffer(B);                              \
+    lk_addfstring(B, "log.%s." #key, config->name); \
     config->mask &= ~lk_M##key;                        \
-    if ((s = lk_getconfig(ls->S, lk_buffer(buff)))) {  \
-        lk_strcpy(config->key, lk_buffer(buff),        \
+    if ((s = lk_getconfig(ls->S, lk_buffer(B)))) {  \
+        lk_strcpy(config->key, lk_buffer(B),        \
                 LK_MAX_CONFIGPATH);                    \
         config->mask |= lk_M##key;                     \
         lk_deldata(ls->S, (lk_Data*)s); }            } while(0)
@@ -138,63 +139,63 @@ static void lkX_createdirs(lk_State *S, const char *path) {
 }
 
 static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
-    lk_Buffer buff;
+    lk_Buffer B;
     struct tm tm;
     const char *s;
     lkX_localtime(time(NULL), &tm);
-    lk_initbuffer(ls->S, &buff);
+    lk_initbuffer(ls->S, &B);
     for (s = dumper->name; *s != '\0'; ++s) {
         if (*s != '%') {
-            lk_addchar(&buff, *s);
+            lk_addchar(&B, *s);
             continue;
         }
-        switch (*++s) {
-        case 'Y': lk_addfstring(&buff, "%04d", tm.tm_year + 1900); break;
-        case 'M': lk_addfstring(&buff, "%02d", tm.tm_mon + 1); break;
-        case 'D': lk_addfstring(&buff, "%02d", tm.tm_mday); break;
-        case 'I': lk_addfstring(&buff, "%d", dumper->index); break;
-        default:  lk_addchar(&buff, '%'); /* FALLTHROUGH */
-        case '%': lk_addchar(&buff, *s); break;
+        switch (s[1]) {
+        case 'Y': lk_addfstring(&B, "%04d", tm.tm_year + 1900); break;
+        case 'M': lk_addfstring(&B, "%02d", tm.tm_mon + 1); break;
+        case 'D': lk_addfstring(&B, "%02d", tm.tm_mday); break;
+        case 'I': lk_addfstring(&B, "%d", dumper->index); break;
+        default:  lk_addchar(&B, '%'); /* FALLTHROUGH */
+        case '%': if (*s != '\0') lk_addchar(&B, *s++); break;
         }
     }
-    lk_addchar(&buff, '\0');
-    lkX_createdirs(ls->S, lk_buffer(&buff));
+    lk_addchar(&B, '\0');
+    lkX_createdirs(ls->S, lk_buffer(&B));
 #ifdef _MSC_VER
-    fopen_s(&dumper->fp, lk_buffer(&buff), "a");
+    fopen_s(&dumper->fp, lk_buffer(&B), "a");
 #else
-    dumper->fp = fopen(lk_buffer(&buff), "a");
+    dumper->fp = fopen(lk_buffer(&B), "a");
 #endif
-    lk_freebuffer(&buff);
+    lk_freebuffer(&B);
 }
 
 static lk_Dumper *lkX_newdumper(lk_LogState *ls, lk_LogConfig *config, lk_LogHeader *hs) {
     const char *s;
-    lk_Buffer buff;
+    lk_Buffer B;
     lk_Dumper *dumper;
     lk_Entry *e;
     if (!(config->mask & lk_Mfilepath))
         return NULL;
-    lk_initbuffer(ls->S, &buff);
+    lk_initbuffer(ls->S, &B);
     for (s = config->filepath; *s != '\0'; ++s) {
         if (*s != '%') {
-            lk_addchar(&buff, *s);
+            lk_addchar(&B, *s);
             continue;
         }
         switch (*++s) {
-        case 'L': lk_addstring(&buff, hs->level); break;
-        case 'S': lk_addstring(&buff, hs->service); break;
-        case 'T': lk_addstring(&buff, hs->tag); break;
-        default:  lk_addchar(&buff, '%');
-                  lk_addchar(&buff, *s); break;
+        case 'L': lk_addstring(&B, hs->level); break;
+        case 'S': lk_addstring(&B, hs->service); break;
+        case 'T': lk_addstring(&B, hs->tag); break;
+        default:  lk_addchar(&B, '%');
+                  lk_addchar(&B, *s); break;
         }
     }
-    lk_addchar(&buff, '\0');
-    e = lk_settable(ls->S, &ls->dump, lk_buffer(&buff));
-    if (e->key != lk_buffer(&buff)) return (lk_Dumper*)e->key;
+    lk_addchar(&B, '\0');
+    e = lk_settable(ls->S, &ls->dump, lk_buffer(&B));
+    if (e->key != lk_buffer(&B)) return (lk_Dumper*)e->key;
     dumper = (lk_Dumper*)lk_poolalloc(ls->S, &ls->dumpers);
     memset(dumper, 0, sizeof(*dumper));
-    lk_strcpy(dumper->name, lk_buffer(&buff), LK_MAX_CONFIGPATH);
-    lk_freebuffer(&buff);
+    lk_strcpy(dumper->name, lk_buffer(&B), LK_MAX_CONFIGPATH);
+    lk_freebuffer(&B);
     if (config->interval > 0)
         lkX_settime(dumper, config->interval);
     lkX_openfile(ls, dumper);
@@ -230,14 +231,14 @@ static lk_LogConfig *lkX_newconfig(lk_LogState *ls, const char *name) {
 static lk_LogConfig* lkX_getconfig(lk_LogState *ls, const char *name) {
     lk_LogConfig *config = lkX_newconfig(ls, name);
     if (config->mask & lk_Mreload) {
-        lk_Buffer buff;
-        lk_initbuffer(ls->S, &buff);
-        lkX_readinteger(ls, &buff, config, color);
-        lkX_readinteger(ls, &buff, config, interval);
-        lkX_readstring(ls,  &buff, config, filepath);
+        lk_Buffer B;
+        lk_initbuffer(ls->S, &B);
+        lkX_readinteger(ls, &B, config, color);
+        lkX_readinteger(ls, &B, config, interval);
+        lkX_readstring(ls,  &B, config, filepath);
         if (config->interval > 60 * 60 * 24)
             config->interval = 60 * 60 * 24;
-        lk_freebuffer(&buff);
+        lk_freebuffer(&B);
     }
     return config;
 }

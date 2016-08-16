@@ -179,7 +179,7 @@ static int lkX_callhandlers (lk_Loader *loader, lk_LoaderNode *list) {
         if (node->loader == NULL)
             ++removed;
         else {
-            int ret;
+            int ret = LK_OK;
             lk_try(S, &ctx,
                     ret = node->loader(S, node->ud, loader, loader->module));
             if (ret == LK_ERR || ctx.retcode == LK_ERR)
@@ -279,6 +279,7 @@ LK_API lk_Service *lk_require (lk_Service *svr, const char *name) {
     int removed;
 
     lkX_initloader(ls->S, &loader, name);
+    lk_lock(ls->lock);
     list = ls->loader_list;
     lkQ_init(&ls->loader_list);
     lk_unlock(ls->lock);

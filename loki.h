@@ -629,7 +629,8 @@ LK_API void lk_deldata (lk_State *S, lk_Data *s) {
 LK_API lk_Data *lk_newstring (lk_State *S, const char *s) {
     size_t len = s ? strlen(s) : 0;
     lk_Data *data = lk_newdata(S, len+1);
-    memcpy(data, s, len+1);
+    if (s == NULL) *(char*)data = '\0';
+    else memcpy(data, s, len + 1);
     lk_setlen(data, len);
     return data;
 }
@@ -835,7 +836,7 @@ LK_API void lk_popcontext (lk_State *S, lk_Context *ctx) {
         cleanups = next;
     }
     lk_unlock(S->pool_lock);
-    lk_settls(S->tls_index, ctx->prev);
+    if (ctx) lk_settls(S->tls_index, ctx->prev);
 }
 
 LK_API int lk_pcall (lk_State *S, lk_ProtectedHandler *h, void *ud) {
@@ -1208,7 +1209,7 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     lk_Service *src = sig && sig->src ? sig->src : lk_self(S);
     lk_Service *dst = lkE_checkservice(S, slot, src);
     lk_SignalNode *node = NULL;
-    if (sig == NULL || dst == NULL) return LK_ERR;
+    if (S == NULL || sig == NULL || dst == NULL) return LK_ERR;
     lk_lock(S->pool_lock);
     node = (lk_SignalNode*)lk_poolalloc(S, &S->signals);
     lk_unlock(S->pool_lock);

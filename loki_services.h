@@ -4,6 +4,9 @@
 
 #include "loki.h"
 #include "lk_buffer.h"
+#include "lk_notify.h"
+
+LK_NS_BEGIN
 
 
 /* services */
@@ -110,6 +113,8 @@ LK_API void lk_deludp  (lk_Udp *udp);
 LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned len,
                        const char *addr, unsigned port);
 
+
+LK_NS_END
 
 #endif /* loki_services_h */
 
