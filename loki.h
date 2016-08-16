@@ -917,7 +917,7 @@ LK_API int lk_initthread (lk_Thread *t, lk_ThreadHandler *h, void *ud) {
 
 LK_API void lk_waitevent (lk_Event *evt, lk_Lock *lock, int waitms) {
     lk_unlock(*lock);
-    WaitForSingleObject(evt, waitms);
+    WaitForSingleObject(*evt, waitms < 0 ? INFINITE : (DWORD)waitms);
     lk_lock(*lock);
 }
 
