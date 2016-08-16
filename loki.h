@@ -248,7 +248,6 @@ typedef HANDLE            lk_Thread;
 #define lk_freeevent(evt) CloseHandle(evt)
 #define lk_signal(evt)    SetEvent(evt)
 
-#define lk_initthread(t,f,ud) ((*(t)=(HANDLE)_beginthreadex(NULL,0,(f),(ud),0,NULL))!=NULL)
 #define lk_waitthread(t)  (WaitForSingleObject((t), INFINITE),(void)lk_freethread(t))
 #define lk_freethread(t)  ((void)CloseHandle(t))
 
@@ -278,11 +277,21 @@ typedef pthread_t         lk_Thread;
 #define lk_freeevent(evt) pthread_cond_destroy(&(evt))
 #define lk_signal(evt)    pthread_cond_signal(&(evt))
 
-#define lk_initthread(t,f,ud) (pthread_create((t),NULL,(f),(ud)) == 0)
 #define lk_waitthread(t)  pthread_join((t),NULL)
 #define lk_freethread(t)  pthread_cancel(t)
 
 #endif
+
+LK_NS_BEGIN
+
+typedef void lk_ThreadHandler (void *args);
+
+LK_API int lk_initthread (lk_Thread *t, lk_ThreadHandler *h, void *ud);
+LK_API int lk_cpucount   (void);
+
+LK_API void lk_waitevent (lk_Event *evt, lk_Lock *lock, int waitms);
+
+LK_NS_END
 
 #endif /* lk_thread_h */
 
@@ -327,21 +336,21 @@ typedef pthread_t         lk_Thread;
 
 #include <setjmp.h>
 
-# if defined(__cplusplus) && !defined(LK_USE_LONGJMP)
-#   define lk_throw(S,c) throw(c)
-#   define lk_try(S,c,a) do { try { a; } catch(lk_Context *c) {} } while (0)
-#   define lk_JmpBuf     int  /* dummy variable */
+#if defined(__cplusplus) && !defined(LK_USE_LONGJMP)
+#  define lk_throw(S,c) throw(c)
+#  define lk_try(S,c,a) do { try { a; } catch(lk_Context *c) {} } while (0)
+#  define lk_JmpBuf     int  /* dummy variable */
 
-# elif _WIN32 /* ISO C handling with long jumps */
-#   define lk_throw(S,c) longjmp((c)->b, 1)
-#   define lk_try(S,c,a) do { if (setjmp((c)->b) == 0) { a; } } while (0)
-#   define lk_JmpBuf     jmp_buf
+#elif _WIN32 /* ISO C handling with long jumps */
+#  define lk_throw(S,c) longjmp((c)->b, 1)
+#  define lk_try(S,c,a) do { if (setjmp((c)->b) == 0) { a; } } while (0)
+#  define lk_JmpBuf     jmp_buf
 
-# else /* in POSIX, try _longjmp/_setjmp (more efficient) */
-#   define lk_throw(L,c) _longjmp((c)->b, 1)
-#   define lk_try(L,c,a) do { if (_setjmp((c)->b) == 0) { a; } } while (0)
-#   define lk_JmpBuf     jmp_buf
-# endif
+#else /* in POSIX, try _longjmp/_setjmp (more efficient) */
+#  define lk_throw(L,c) _longjmp((c)->b, 1)
+#  define lk_try(L,c,a) do { if (_setjmp((c)->b) == 0) { a; } } while (0)
+#  define lk_JmpBuf     jmp_buf
+#endif
 
 LK_NS_BEGIN
 
@@ -508,7 +517,7 @@ static void *lkM_outofmemory (void) {
     return NULL;
 }
 
-LK_API int lk_vsnprintf(char *buff, size_t size, const char *fmt, va_list l) {
+LK_API int lk_vsnprintf (char *buff, size_t size, const char *fmt, va_list l) {
 #if !defined(_WIN32) || defined(__MINGW32__)
     return vsnprintf(buff, size, fmt, l);
 #else
@@ -694,8 +703,7 @@ static lk_Entry *lkH_mainposition (lk_Table *t, unsigned hash) {
 
 static lk_Entry *lkH_newkey (lk_State *S, lk_Table *t, lk_Entry *entry) {
     lk_Entry *mp;
-    if (entry->key == NULL
-            || (t->size == 0 && lk_resizetable(S, t, LK_MIN_HASHSIZE) == 0))
+    if (!entry->key || (!t->size && !lk_resizetable(S, t, LK_MIN_HASHSIZE)))
         return NULL;
 redo:
     mp = lkH_mainposition(t, entry->hash);
@@ -706,8 +714,7 @@ redo:
             if (e->key == NULL && e->next == 0)  { f = e; break; }
         }
         if (f == NULL) {
-            if (lk_resizetable(S, t, lkH_countsize(t)*2) == 0)
-                return NULL;
+            if (lk_resizetable(S, t, lkH_countsize(t)*2) == 0) return NULL;
             goto redo; /* return lkH_newkey(t, entry); */
         }
         othern = lkH_mainposition(t, mp->hash);
@@ -717,17 +724,12 @@ redo:
                 othern = next;
             othern->next = lk_offset(f, othern);
             memcpy(f, mp, t->entry_size);
-            if (mp->next != 0) {
-                f->next += lk_offset(mp, f);
-                mp->next = 0;
-            }
+            if (mp->next != 0) f->next += lk_offset(mp, f), mp->next = 0;
         }
         else {
-            if (mp->next != 0)
-                f->next = lk_offset(mp, f) + mp->next;
-            else assert(f->next == 0);
-            mp->next = lk_offset(f, mp);
-            mp = f;
+            if (mp->next != 0) f->next = lk_offset(mp, f) + mp->next;
+            else        assert(f->next == 0);
+            mp->next = lk_offset(f, mp), mp = f;
         }
     }
     mp->key  = entry->key;
@@ -887,161 +889,71 @@ LK_API int lk_addcleanup (lk_State *S, lk_ProtectedHandler *h, void *ud) {
 }
 
 
-/* platform specific routines */
+/* thread routines */
 
-static void lkS_dispatchGS (lk_State *S, lk_Service *svr);
+typedef struct lk_ThreadContext {
+    lk_ThreadHandler *h;
+    void             *ud;
+} lk_ThreadContext;
 
 #ifdef _WIN32
 
-static size_t lkP_getcpucount (void) {
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    return info.dwNumberOfProcessors;
-}
-
-static unsigned __stdcall lkP_poller (void *lpParameter) {
-    lk_Context ctx;
-    lk_Slot *slot  = (lk_Slot*)lpParameter;
-    lk_Poll *poll = (lk_Poll*)slot;
-    lk_State *S = slot->S;
-    lk_pushcontext(S, &ctx, slot);
-    lk_try(S, &ctx, slot->handler(S, slot, NULL));
-    lk_popcontext(S, &ctx);
-    poll->status = LK_STOPPING;
+static unsigned __stdcall lkT_worker (void *lpParameter) {
+    lk_ThreadContext ctx = *(lk_ThreadContext*)lpParameter;
+    free(lpParameter);
+    ctx.h(ctx.ud);
     return 0;
 }
 
-static unsigned __stdcall lkP_worker (void *lpParameter) {
-    int status  = LK_WORKING;
-    lk_State *S = (lk_State*)lpParameter;
-    while (status == LK_WORKING) {
-        lk_Service *svr;
-        WaitForSingleObject(S->queue_event, INFINITE);
-        lk_lock(S->queue_lock);
-        lkQ_dequeue(&S->main_queue, svr);
-        if ((status = S->status) >= LK_STOPPING)
-            lk_signal(S->queue_event);
-        lk_unlock(S->queue_lock);
-        while (svr != NULL) {
-            lkS_dispatchGS(S, svr);
-            lk_lock(S->queue_lock);
-            lkQ_dequeue(&S->main_queue, svr);
-            lk_unlock(S->queue_lock);
-        }
-    }
-    return 0;
+LK_API int lk_initthread (lk_Thread *t, lk_ThreadHandler *h, void *ud) {
+    lk_ThreadContext *ctx = (lk_ThreadContext*)malloc(sizeof(lk_ThreadContext));
+    if (ctx == NULL) return 0;
+    ctx->h  = h;
+    ctx->ud = ud;
+    *t = (HANDLE)_beginthreadex(NULL, 0, lkT_worker, ctx, 0, NULL);
+    return *t != NULL;
 }
 
-LK_API void lk_waitclose (lk_State *S) {
-    WaitForMultipleObjects(S->nthreads, S->threads, TRUE, INFINITE);
-}
-
-LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
-    lk_Poll *poll = (lk_Poll*)slot;
-    lk_SignalNode *node;
-    if (!slot->is_poll) return LK_ERR;
-    lk_lock(poll->lock);
-    lkQ_dequeue(&poll->signals, node);
-    lk_unlock(poll->lock);
-    if (waitms != 0 && (!node || poll->status < LK_STOPPING)) {
-        DWORD timeout = waitms < 0 ? INFINITE : (DWORD)waitms;
-        WaitForSingleObject(poll->event, timeout);
-    }
-    if (node) {
-        lk_State *S = slot->S;
-        if (sig) *sig = node->data;
-        lk_lock(S->pool_lock);
-        lk_poolfree(&S->signals, node);
-        lk_unlock(S->pool_lock);
-        return LK_OK;
-    }
-    return poll->status >= LK_STOPPING ? LK_ERR : LK_TIMEOUT;
+LK_API void lk_waitevent (lk_Event *evt, lk_Lock *lock, int waitms) {
+    lk_unlock(*lock);
+    WaitForSingleObject(evt, waitms);
+    lk_lock(*lock);
 }
 
 #else
 
-static size_t lkP_getcpucount (void) {
-    return (size_t)sysconf(_SC_NPROCESSORS_ONLN);
-}
-
-static void *lkP_poller (void *ud) {
-    lk_Context ctx;
-    lk_Slot *slot  = (lk_Slot*)ud;
-    lk_Poll *poll = (lk_Poll*)slot;
-    lk_State *S = slot->S;
-    lk_pushcontext(S, &ctx, slot);
-    lk_try(S, &ctx, slot->handler(S, slot, NULL));
-    lk_popcontext(S, &ctx);
-    poll->status = LK_STOPPING;
+static void *lkT_worker (void *ud) {
+    lk_ThreadContext ctx = *(lk_ThreadContext*)ud;
+    free(ud);
+    ctx.h(ctx.ud);
     return NULL;
 }
 
-static void *lkP_worker (void *ud) {
-    int status = LK_WORKING;
-    lk_State *S = (lk_State*)ud;
-    lk_lock(S->queue_lock);
-    while (status == LK_WORKING) {
-        lk_Service *svr;
-        for (;;) {
-            lkQ_dequeue(&S->main_queue, svr);
-            status = S->status;
-            if (svr != NULL || status != LK_WORKING)
-                break;
-            pthread_cond_wait(&S->queue_event, &S->queue_lock);
+LK_API int lk_initthread (lk_Thread *t, lk_ThreadHandler *h, void *ud) {
+    lk_ThreadContext *ctx = (lk_ThreadContext*)malloc(sizeof(lk_ThreadContext));
+    if (ctx == NULL) return 0;
+    ctx->h  = h;
+    ctx->ud = ud;
+    return pthread_create(t, NULL, lkT_worker, ctx) == 0;
+}
+
+LK_API void lk_waitevent (lk_Event *evt, lk_Lock *lock, int waitms) {
+    if (waitms < 0)
+        pthread_cond_wait(evt, lock);
+    else {
+        struct timeval tv;
+        struct timespec ts;
+        int sec  = waitms / 1000;
+        int usec = waitms % 1000 * 1000;
+        gettimeofday(&tv, NULL);
+        if (tv.tv_usec + usec > 1000000) {
+            sec += 1;
+            usec = (tv.tv_usec + usec) - 1000000;
         }
-        if (status >= LK_STOPPING)
-            pthread_cond_broadcast(&S->queue_event);
-        while (svr != NULL) {
-            lk_unlock(S->queue_lock);
-            lkS_dispatchGS(S, svr);
-            lk_lock(S->queue_lock);
-            lkQ_dequeue(&S->main_queue, svr);
-        }
+        ts.tv_sec = tv.tv_sec + sec;
+        ts.tv_nsec = (tv.tv_usec + usec) * 1000;
+        pthread_cond_timedwait(evt, lock, &ts);
     }
-    lk_unlock(S->queue_lock);
-    return NULL;
-}
-
-static int lkP_timedwait (lk_Event *event, lk_Lock *lock, int waitms) {
-    struct timeval tv;
-    struct timespec ts;
-    int sec  = waitms / 1000;
-    int usec = waitms % 1000 * 1000;
-    gettimeofday(&tv, NULL);
-    if (tv.tv_usec + usec > 1000000) {
-        sec += 1;
-        usec = (tv.tv_usec + usec) - 1000000;
-    }
-    ts.tv_sec = tv.tv_sec + sec;
-    ts.tv_nsec = (tv.tv_usec + usec) * 1000;
-    return pthread_cond_timedwait(event, lock, &ts);
-}
-
-LK_API void lk_waitclose (lk_State *S) {
-    size_t i;
-    for (i = 0; i < S->nthreads; ++i)
-        pthread_join(S->threads[i], NULL);
-    S->nthreads = 0;
-}
-
-LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
-    lk_Poll *poll = (lk_Poll*)slot;
-    lk_SignalNode *node;
-    if (!slot->is_poll) return LK_ERR;
-    lk_lock(poll->lock);
-    lkQ_dequeue(&poll->signals, node);
-    if (waitms != 0 && (!node || poll->status < LK_STOPPING)) {
-        if (waitms < 0)
-            pthread_cond_wait(&poll->event, &poll->lock);
-        else
-            lkP_timedwait(&poll->event, &poll->lock, waitms);
-    }
-    lk_unlock(poll->lock);
-    if (node) {
-        if (sig) *sig = node->data;
-        return LK_OK;
-    }
-    return poll->status >= LK_STOPPING ? LK_ERR : LK_TIMEOUT;
 }
 
 #endif
@@ -1112,13 +1024,24 @@ static lk_Slot *lkE_register (lk_State *S, lk_Slot *slot) {
     return slot;
 }
 
+static void lkE_poller (void *ud) {
+    lk_Context ctx;
+    lk_Slot *slot  = (lk_Slot*)ud;
+    lk_Poll *poll = (lk_Poll*)slot;
+    lk_State *S = slot->S;
+    lk_pushcontext(S, &ctx, slot);
+    lk_try(S, &ctx, slot->handler(S, slot, NULL));
+    lk_popcontext(S, &ctx);
+    poll->status = LK_STOPPING;
+}
+
 static int lkE_startpoll (lk_Poll *poll) {
     lk_State *S = poll->slot.S;
     lkQ_init(&poll->signals);
     poll->status = LK_WORKING;
     if (!lk_initlock(&poll->lock))   goto err_lock;
     if (!lk_initevent(&poll->event)) goto err_event;
-    if (!lk_initthread(&poll->thread, lkP_poller, poll)) {
+    if (!lk_initthread(&poll->thread, lkE_poller, poll)) {
         lk_freeevent(poll->event);
 err_event:
         lk_freelock(poll->lock);
@@ -1264,6 +1187,22 @@ LK_API lk_Slot *lk_slot (lk_State *S, const char *name) {
     return slot;
 }
 
+LK_API int lk_wait (lk_Slot *slot, lk_Signal* sig, int waitms) {
+    lk_Poll *poll = (lk_Poll*)slot;
+    lk_SignalNode *node;
+    if (!slot->is_poll) return LK_ERR;
+    lk_lock(poll->lock);
+    lkQ_dequeue(&poll->signals, node);
+    if (waitms != 0 && (!node || poll->status < LK_STOPPING))
+        lk_waitevent(&poll->event, &poll->lock, waitms);
+    lk_unlock(poll->lock);
+    if (node) {
+        if (sig) *sig = node->data;
+        return LK_OK;
+    }
+    return poll->status >= LK_STOPPING ? LK_ERR : LK_TIMEOUT;
+}
+
 LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     lk_State *S = slot ? slot->S : NULL;
     lk_Service *src = sig && sig->src ? sig->src : lk_self(S);
@@ -1315,11 +1254,6 @@ LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, lk_Data 
 
 /* service routines */
 
-static void lkG_onuse   (lk_State *S, lk_Service *svr);
-static void lkG_onopen  (lk_State *S, lk_Service *svr);
-static void lkG_onweak  (lk_State *S, lk_Service *svr);
-static void lkG_onclose (lk_State *S, lk_Service *svr);
-
 LK_API lk_Handler *lk_refactor (lk_Service *svr)
 { return svr ? svr->refactor : NULL; }
 
@@ -1329,33 +1263,74 @@ LK_API void lk_setrefactor (lk_Service *svr, lk_Handler *h)
 LK_API lk_Service *lk_self (lk_State *S)
 { lk_Slot *slot = lk_current(S); return slot ? slot->service : NULL; }
 
+static void lkG_onuse (lk_State *S, lk_Service *svr) {
+    if (S->monitor) {
+        lk_Signal sig = LK_SIGNAL;
+        sig.type = LK_MONITOR_ONUSE;
+        sig.data = svr;
+        lk_emit(S->monitor, &sig);
+    }
+}
+
+static void lkG_onopen (lk_State *S, lk_Service *svr) {
+    if (S->monitor) {
+        lk_Signal sig = LK_SIGNAL;
+        sig.type = LK_MONITOR_ONOPEN;
+        sig.data = svr;
+        lk_emit(S->monitor, &sig);
+    }
+    if (!S->logger && strcmp(svr->slot.name, "log") == 0) {
+        S->logger = &svr->slot;
+        svr->slot.no_refactor = 1;
+    }
+    if (!S->monitor && strcmp(svr->slot.name, "monitor") == 0) {
+        S->monitor = &svr->slot;
+        svr->slot.no_refactor = 1;
+    }
+}
+
+static void lkG_onweak (lk_State *S, lk_Service *svr) {
+    if (S->monitor) {
+        lk_Signal sig = LK_SIGNAL;
+        sig.src  = svr;
+        sig.type = LK_MONITOR_ONWEAK;
+        lk_emit(S->monitor, &sig);
+    }
+}
+
+static void lkG_onclose (lk_State *S, lk_Service *svr) {
+    if (&svr->slot == S->logger)  S->logger = NULL;
+    if (&svr->slot == S->monitor) S->monitor = NULL;
+    if (S->monitor && S->monitor != &svr->slot) {
+        lk_Signal sig = LK_SIGNAL;
+        sig.type = LK_MONITOR_ONCLOSE;
+        lk_emit(S->monitor, &sig);
+    }
+}
+
 static void lkS_freeslotsG (lk_State *S, lk_Service *svr) {
-    lk_Slot *polls;
+    lk_Slot *slots = svr->slots, *polls = svr->polls, *next;
     lk_lock(S->lock);
-    lk_lock(S->pool_lock);
-    while (svr->slots != NULL) {
-        lk_Slot *next = svr->slots->next;
+    for (; svr->slots != NULL; svr->slots = svr->slots->next) {
         lk_Entry *e = lk_gettable(&S->slot_names, svr->slots->name);
         assert(e && (lk_Slot*)e->key == svr->slots);
-        if (!svr->slots->is_svr)
-            lk_poolfree(&S->slots, svr->slots);
-        e->key = NULL;
-        svr->slots = next;
+        if (e) e->key = NULL;
     }
-    lk_unlock(S->pool_lock);
-    polls = svr->polls;
-    while (svr->polls != NULL) {
-        lk_Slot *next = svr->polls->next;
+    for (; svr->polls != NULL; svr->polls = svr->polls->next) {
         lk_Entry *e = lk_gettable(&S->slot_names, svr->polls->name);
         assert(e && (lk_Slot*)e->key == svr->polls);
-        e->key = NULL;
-        svr->polls = next;
+        if (e) e->key = NULL;
     }
     lk_unlock(S->lock);
-    while (polls != NULL) {
-        lk_Slot *next = polls->next;
+    lk_lock(S->pool_lock);
+    for (; slots != NULL; slots = next) {
+        next = slots->next;
+        if (!slots->is_svr) lk_poolfree(&S->slots, slots);
+    }
+    lk_unlock(S->pool_lock);
+    for (; polls != NULL; polls = next) {
+        next = polls->next;
         lkE_delpollG(S, (lk_Poll*)polls);
-        polls = next;
     }
 }
 
@@ -1376,8 +1351,7 @@ static void lkS_delserviceG (lk_State *S, lk_Service *svr) {
     }
     lk_lock(S->lock);
     if (!svr->weak) --S->nservices;
-    if ((S->nservices == 1 && S->root.slot.handler == NULL)
-            || S->nservices == 0) {
+    if ((S->nservices == 1 && !S->root.slot.handler) || !S->nservices) {
         S->status = LK_STOPPING;
         lk_lock(S->queue_lock);
         lk_signal(S->queue_event);
@@ -1508,10 +1482,8 @@ LK_API lk_Service *lk_launch (lk_State *S, const char *name, lk_Handler *h, void
     lk_Service *svr;
     if (S == NULL || name == NULL || h == NULL) return NULL;
 retry:
-    if ((svr = (lk_Service*)lkE_findslotG(S, name)) != NULL) {
-        lkG_onuse(S, svr);
-        return svr;
-    }
+    if ((svr = (lk_Service*)lkE_findslotG(S, name)) != NULL)
+    { lkG_onuse(S, svr); return svr; }
     if (!lkS_check(S, name)) return NULL;
     svr = (lk_Service*)lkE_new(S, sizeof(lk_Service), name, NULL);
     if (!svr) return NULL; /* avoid MSVC warning */
@@ -1523,63 +1495,47 @@ retry:
     }
     svr->slot.is_svr  = 1;
     svr->slot.service = svr;
-    svr->slots = &svr->slot;
+    svr->slots        = &svr->slot;
     lkQ_init(&svr->signals);
     lk_lock(S->lock);
-    if (!lkE_register(S, &svr->slot))
-        svr = NULL; /* already created? retry lounch */
+    if (!lkE_register(S, &svr->slot)) svr = NULL; /* already created? retry */
     lk_unlock(S->lock);
     if (svr == NULL) goto retry;
-    /* only one thread could reach here */
-    return lkS_initserviceGS(S, svr, h, data);
+    return lkS_initserviceGS(S, svr, h, data); /* only one thread reach here */
 }
 
 
 /* global routines */
 
-static void lkG_onuse (lk_State *S, lk_Service *svr) {
-    if (S->monitor) {
-        lk_Signal sig = LK_SIGNAL;
-        sig.type = LK_MONITOR_ONUSE;
-        sig.data = svr;
-        lk_emit(S->monitor, &sig);
+static void lkG_worker(void *ud) {
+    lk_State *S = (lk_State*)ud;
+    lk_Service *svr;
+    lk_lock(S->queue_lock);
+    while (S->status == LK_WORKING) {
+        lkQ_dequeue(&S->main_queue, svr);
+        while (svr == NULL && S->status == LK_WORKING) {
+            lk_waitevent(&S->queue_event, &S->queue_lock, -1);
+            lkQ_dequeue(&S->main_queue, svr);
+        }
+#ifdef _WIN32
+        if (S->status >= LK_STOPPING) lk_signal(&S->queue_event);
+#else
+        if (S->status >= LK_STOPPING) pthread_cond_broadcast(&S->queue_event);
+#endif
+        while (svr != NULL) {
+            lk_unlock(S->queue_lock);
+            lkS_dispatchGS(S, svr);
+            lk_lock(S->queue_lock);
+            lkQ_dequeue(&S->main_queue, svr);
+        }
     }
+    lk_unlock(S->queue_lock);
 }
 
-static void lkG_onopen (lk_State *S, lk_Service *svr) {
-    if (S->monitor) {
-        lk_Signal sig = LK_SIGNAL;
-        sig.type = LK_MONITOR_ONOPEN;
-        sig.data = svr;
-        lk_emit(S->monitor, &sig);
-    }
-    if (!S->logger && strcmp(svr->slot.name, "log") == 0) {
-        S->logger = &svr->slot;
-        svr->slot.no_refactor = 1;
-    }
-    if (!S->monitor && strcmp(svr->slot.name, "monitor") == 0) {
-        S->monitor = &svr->slot;
-        svr->slot.no_refactor = 1;
-    }
-}
-
-static void lkG_onweak (lk_State *S, lk_Service *svr) {
-    if (S->monitor) {
-        lk_Signal sig = LK_SIGNAL;
-        sig.src  = svr;
-        sig.type = LK_MONITOR_ONWEAK;
-        lk_emit(S->monitor, &sig);
-    }
-}
-
-static void lkG_onclose (lk_State *S, lk_Service *svr) {
-    if (&svr->slot == S->logger)  S->logger = NULL;
-    if (&svr->slot == S->monitor) S->monitor = NULL;
-    if (S->monitor && S->monitor != &svr->slot) {
-        lk_Signal sig = LK_SIGNAL;
-        sig.type = LK_MONITOR_ONCLOSE;
-        lk_emit(S->monitor, &sig);
-    }
+static void *default_allocf (void *ud, void *ptr, size_t size, size_t osize) {
+    (void)ud, (void)osize;
+    if (size == 0) { free(ptr); return NULL; }
+    return realloc(ptr, size);
 }
 
 static int lkG_initroot (lk_State *S, const char *name) {
@@ -1613,20 +1569,13 @@ static void lkG_delstate (lk_State *S) {
     lk_freepool(S, &S->polls);
     lk_freetable(S, &S->config);
     lk_freetable(S, &S->slot_names);
-    for (i = 0; i < S->nthreads; ++i)
-        lk_freethread(S->threads[i]);
+    for (i = 0; i < S->nthreads; ++i) lk_freethread(S->threads[i]);
     lk_freeevent(S->queue_event);
     lk_freetls(S->tls_index);
     lk_freelock(S->config_lock);
     lk_freelock(S->queue_lock);
     lk_freelock(S->lock);
     S->allocf(S->alloc_ud, S, 0, sizeof(lk_State));
-}
-
-static void *default_allocf (void *ud, void *ptr, size_t size, size_t osize) {
-    (void)ud, (void)osize;
-    if (size == 0) { free(ptr); return NULL; }
-    return realloc(ptr, size);
 }
 
 LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud) {
@@ -1690,15 +1639,36 @@ LK_API int lk_start (lk_State *S, int threads) {
     lk_lock(S->lock);
     S->nthreads = threads;
     if (S->nthreads <= 0)
-        S->nthreads = lkP_getcpucount();
+        S->nthreads = lk_cpucount();
     S->status = LK_WORKING;
     for (i = 0; i < S->nthreads; ++i) {
-        if (!lk_initthread(&S->threads[i], lkP_worker, S))
+        if (!lk_initthread(&S->threads[i], lkG_worker, S))
             break;
     }
     count = S->nthreads = i;
     lk_unlock(S->lock);
     return count;
+}
+
+LK_API int lk_cpucount (void) {
+#ifdef _WIN32
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return (int)info.dwNumberOfProcessors;
+#else
+    return (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+}
+
+LK_API void lk_waitclose (lk_State *S) {
+#ifdef _WIN32
+    WaitForMultipleObjects(S->nthreads, S->threads, TRUE, INFINITE);
+#else
+    size_t i;
+    for (i = 0; i < S->nthreads; ++i)
+        pthread_join(S->threads[i], NULL);
+    S->nthreads = 0; /* not in win32: we should call CloseHandle() on win32 */
+#endif
 }
 
 LK_API char *lk_getconfig (lk_State *S, const char *key) {
