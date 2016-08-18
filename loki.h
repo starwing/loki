@@ -1549,11 +1549,7 @@ static void lkG_worker(void *ud) {
             lkQ_dequeue(&S->main_queue, svr);
         }
     }
-#ifdef _WIN32
     lk_signal(S->queue_event);
-#else
-    pthread_cond_broadcast(&S->queue_event);
-#endif
     lk_unlock(S->queue_lock);
 }
 
