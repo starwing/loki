@@ -627,6 +627,7 @@ LK_API void *lk_poolalloc (lk_State *S, lk_MemPool *mpool) {
 LK_API lk_Data *lk_newdata (lk_State *S, size_t size) {
     size_t rawlen = sizeof(lk_Data) + size;
     lk_Data *data = (lk_Data*)lk_malloc(S, rawlen);
+    assert(size < (1<<24));
     data->size = size;
     data->ref  = 0;
     data->len  = 0;
@@ -1382,6 +1383,7 @@ static void lkS_delserviceG (lk_State *S, lk_Service *svr) {
 
 static void lkS_active (lk_State *S, lk_Service *svr, int sig) {
     lk_lock(S->queue_lock);
+    assert(svr->status != LK_SLEEPING);
     lkQ_enqueue(&S->main_queue, svr);
     if (sig) lk_signal(S->queue_event);
     lk_unlock(S->queue_lock);
@@ -1436,7 +1438,7 @@ static void lkS_dispatchGS (lk_State *S, lk_Service *svr) {
     lk_lock(svr->lock);
     if (!lkQ_empty(&svr->signals))
         lkS_active(S, svr, 0);
-    if (svr->status == LK_STOPPING && svr->pending != 0)
+    else if (svr->status == LK_STOPPING && svr->pending != 0)
         svr->status = LK_ZOMBIE;
     else if (svr->status < LK_STOPPING)
         svr->status = LK_SLEEPING;
@@ -1539,18 +1541,19 @@ static void lkG_worker(void *ud) {
             lk_waitevent(&S->queue_event, &S->queue_lock, -1);
             lkQ_dequeue(&S->main_queue, svr);
         }
-#ifdef _WIN32
-        if (S->status >= LK_STOPPING) lk_signal(&S->queue_event);
-#else
-        if (S->status >= LK_STOPPING) pthread_cond_broadcast(&S->queue_event);
-#endif
         while (svr != NULL) {
             lk_unlock(S->queue_lock);
+            assert(svr->status != LK_SLEEPING);
             lkS_dispatchGS(S, svr);
             lk_lock(S->queue_lock);
             lkQ_dequeue(&S->main_queue, svr);
         }
     }
+#ifdef _WIN32
+    lk_signal(S->queue_event);
+#else
+    pthread_cond_broadcast(&S->queue_event);
+#endif
     lk_unlock(S->queue_lock);
 }
 
@@ -1583,14 +1586,14 @@ static void lkG_delstate (lk_State *S) {
     }
     while (lk_nextentry(&S->config, &e))
         lk_deldata(S, (lk_Data*)e->key);
+    lk_freetable(S, &S->config);
+    lk_freetable(S, &S->slot_names);
     lk_freepool(S, &S->cleanups);
     lk_freepool(S, &S->signals);
     lk_freepool(S, &S->smallstrings);
     lk_freepool(S, &S->services);
     lk_freepool(S, &S->slots);
     lk_freepool(S, &S->polls);
-    lk_freetable(S, &S->config);
-    lk_freetable(S, &S->slot_names);
     for (i = 0; i < S->nthreads; ++i) lk_freethread(S->threads[i]);
     lk_freeevent(S->queue_event);
     lk_freetls(S->tls_index);
