@@ -99,9 +99,6 @@ LK_API void        lk_close  (lk_State *S);
 
 LK_API lk_Service *lk_self (lk_State *S);
 
-LK_API lk_Handler *lk_refactor    (lk_Service *svr);
-LK_API void        lk_setrefactor (lk_Service *svr, lk_Handler *h);
-
 
 /* message routines */
 
@@ -127,6 +124,9 @@ LK_API void  lk_setdata (lk_Slot *slot, void *data);
 
 LK_API lk_Handler *lk_slothandler    (lk_Slot *slot);
 LK_API void        lk_setslothandler (lk_Slot *slot, lk_Handler *h);
+
+LK_API lk_Handler *lk_refactor    (lk_Slot *slot);
+LK_API void        lk_setrefactor (lk_Slot *slot, lk_Handler *h);
 
 
 LK_NS_END
@@ -440,6 +440,7 @@ struct lk_Slot {
     lk_State   *S;
     lk_Service *service;
     lk_Handler *handler;
+    lk_Handler *refactor;
     void       *data;
 };
 
@@ -461,7 +462,6 @@ struct lk_Service {
     lkQ_type(lk_SignalNode) signals;
     lk_Slot    *slots;
     lk_Slot    *polls;
-    lk_Handler *refactor;
     lk_Lock     lock;
 };
 
@@ -989,6 +989,7 @@ LK_API lk_Service *lk_service     (lk_Slot *slot) { return slot ? slot->service 
 LK_API lk_State   *lk_state       (lk_Slot *slot) { return slot ? slot->S       : NULL; }
 LK_API void       *lk_data        (lk_Slot *slot) { return slot ? slot->data    : NULL; }
 LK_API lk_Handler *lk_slothandler (lk_Slot *slot) { return slot ? slot->handler : NULL; }
+LK_API lk_Handler *lk_refactor    (lk_Slot *slot) { return slot ? slot->refactor : NULL; }
 
 LK_API lk_Slot *lk_current (lk_State *S)
 { lk_Context *ctx = lk_context(S); return ctx ? ctx->current : &S->root.slot; }
@@ -998,6 +999,9 @@ LK_API void lk_setdata (lk_Slot *slot, void *data)
 
 LK_API void lk_setslothandler (lk_Slot *slot, lk_Handler *h)
 { if (slot) slot->handler = h; }
+
+LK_API void lk_setrefactor (lk_Slot *slot, lk_Handler *h)
+{ if (slot) slot->refactor = h; }
 
 static void lkE_name (char *buff, const char *q, const char *name) {
     size_t qlen = strlen(q), namelen;
@@ -1236,7 +1240,7 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     node->slot = slot;
     node->data = *sig;
     node->data.src = src;
-    if (node->data.isdata) lk_usedata(node->data.data);
+    if (node->data.isdata) lk_usedata((lk_Data*)node->data.data);
     if (slot->is_poll)
         lkE_emitpollP((lk_Poll*)slot, node);
     else
@@ -1275,12 +1279,6 @@ LK_API int lk_emitdata (lk_Slot *slot, unsigned type, unsigned session, lk_Data 
 
 
 /* service routines */
-
-LK_API lk_Handler *lk_refactor (lk_Service *svr)
-{ return svr ? svr->refactor : NULL; }
-
-LK_API void lk_setrefactor (lk_Service *svr, lk_Handler *h)
-{ if (svr) svr->refactor = h; }
 
 LK_API lk_Service *lk_self (lk_State *S)
 { lk_Slot *slot = lk_current(S); return slot ? slot->service : NULL; }
@@ -1395,8 +1393,10 @@ static void lkS_callslot (lk_State *S, lk_SignalNode *node, lk_Context *ctx) {
     lk_Service *src = node->data.src;
     assert(src != NULL);
     ctx->current = slot;
-    if (src->refactor && !slot->no_refactor)
-        lk_try(S, ctx, ret = src->refactor(S, slot, &node->data));
+    if (!slot->no_refactor) {
+        lk_Handler *refactor = slot->refactor ? slot->refactor : src->slot.refactor;
+        if (refactor) lk_try(S, ctx, ret = refactor(S, slot, &node->data));
+    }
     if (ret == LK_ERR && slot->handler)
         lk_try(S, ctx, slot->handler(S, slot, &node->data));
     if (node->data.isdata)

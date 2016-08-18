@@ -264,7 +264,7 @@ LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         lk_TimerState *ts = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
         ts->poll = lk_newpoll(S, "poll", lkX_poller, ts);
-        lk_setrefactor(svr, lkX_refactor);
+        lk_setrefactor((lk_Slot*)svr, lkX_refactor);
         lk_setdata((lk_Slot*)svr, ts);
     }
     return LK_WEAK;

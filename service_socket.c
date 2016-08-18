@@ -736,7 +736,7 @@ LKMOD_API int loki_service_socket (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         lk_ZNetState *zs = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
         zs->poll = lk_newpoll(S, "poll", lkX_poller, zs);
-        lk_setrefactor(svr, lkX_refactor);
+        lk_setrefactor((lk_Slot*)svr, lkX_refactor);
         lk_setdata((lk_Slot*)svr, zs);
         return LK_WEAK;
     }
