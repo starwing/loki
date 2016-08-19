@@ -63,10 +63,10 @@ typedef struct lk_Slot    lk_Slot;
 typedef struct lk_Signal {
     lk_Service *src;
     void       *data;
-    unsigned    size   : 24;
-    unsigned    type   : 7;
-    unsigned    isdata : 1; /* data is lk_Data* */
-    unsigned    session;
+    unsigned    size;
+    unsigned    session : 24;
+    unsigned    type    : 7;
+    unsigned    isdata  : 1; /* data is lk_Data* */
 } lk_Signal;
 
 typedef int   lk_Handler (lk_State *S, lk_Slot *slot, lk_Signal *sig);
