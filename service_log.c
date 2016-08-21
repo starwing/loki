@@ -348,6 +348,7 @@ static void lkX_screendump(lk_LogState *ls, const char *s, size_t len, int color
     DWORD written;
     LPWSTR buff = NULL;
     int bytes, cp = CP_UTF8;
+	char eol = '\n';
     if (color & 0x01) attr |= FOREGROUND_RED;
     if (color & 0x02) attr |= FOREGROUND_GREEN;
     if (color & 0x04) attr |= FOREGROUND_BLUE;
@@ -367,17 +368,18 @@ static void lkX_screendump(lk_LogState *ls, const char *s, size_t len, int color
     else      WriteConsoleA(h, s, len, &written, NULL);
     SetConsoleTextAttribute(h, reset);
     lk_freebuffer(&B);
-    fputc('\n', stdout);
+	WriteConsoleA(h, &eol, 1, &written, NULL);
 #else
     int fg = 30 + (color & 0x7), bg = 40 + ((color & 0x70)>>4);
     (void)ls;
     if (color & 0x08) fg += 60;
     if (color & 0x80) bg += 60;
     fprintf(stdout, "\e[%d;%dm%.*s\e[0m\n", fg, bg, (int)len, s);
+	fflush(stdout);
 #endif
 }
 
-static int lkX_writelog(lk_LogState *ls, const char* service_name, char* s, size_t len) {
+static int lkX_writelog(lk_LogState *ls, const char* service_name, const char* s, size_t len) {
     lk_LogConfig *config;
     lk_LogHeader hs;
     lk_initbuffer(ls->S, &hs.buff);
@@ -468,8 +470,11 @@ LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     }
     else if (!sig)
         lkX_delstate(ls);
-    else
-        lkX_writelog(ls, (const char*)sig->src, (char*)sig->data, sig->size);
+    else {
+        const char *s = (const char*)sig->data;
+        size_t len = sig->isdata ? lk_len((lk_Data*)sig->data) : strlen(s);
+        lkX_writelog(ls, (const char*)lk_service(sig->sender), s, len);
+    }
     return LK_OK;
 }
 

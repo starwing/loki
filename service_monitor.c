@@ -25,7 +25,7 @@ static int lkX_triggerevent (lk_State *S, lk_MonitorNode *list, lk_Signal *sig) 
     volatile int removed = 0;
     lk_Service *svrs[2];
     lk_Context ctx;
-    svrs[0] = sig->src;
+    svrs[0] = lk_service(sig->sender);
     svrs[1] = (lk_Service*)sig->data;
 
     lk_pushcontext(S, &ctx, NULL);

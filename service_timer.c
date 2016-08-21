@@ -230,7 +230,7 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         lk_unlock(ts->lock);
         waittime = nexttime == LK_FOREVER ? -1
             : (int)(nexttime - current);
-        if (lk_wait(slot, NULL, waittime) == LK_ERR)
+        if (lk_wait(S, NULL, waittime) == LK_ERR)
             break;
     }
     ts->nexttime = LK_FOREVER;
@@ -242,7 +242,7 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 }
 
 static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = lkX_getstate((lk_Slot*)sig->src);
+    lk_TimerState *ts = lkX_getstate(sig->sender);
     lk_Timer *timer = (lk_Timer*)sig->data;
     (void)slot;
     if (timer->handler) {

@@ -6,3 +6,6 @@
 *.un~
 *_test
 logs/
+*.dSYM/
+.vscode/
+tags

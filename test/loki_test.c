@@ -1,6 +1,6 @@
 ﻿#undef  LOKI_IMPLEMENTATION
 #define LOKI_IMPLEMENTATION
-#include "loki_services.h"
+#include "../loki_services.h"
 
 static  size_t totalmem;
 static lk_Lock memlock;
@@ -25,12 +25,11 @@ static void *debug_allocf(void *ud, void *ptr, size_t size, size_t osize) {
 }
 
 static int echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_Signal ret;
     (void)slot;
     lk_log(S, "msg: %s", (char*)sig->data);
     lk_log(S, "T[]" lk_loc("get msg: [%s]"), (char*)sig->data);
-    ret = *sig;
-    lk_emit((lk_Slot*)sig->src, &ret);
+    sig->isack = 1;
+    lk_emit((lk_Slot*)lk_service(sig->sender), sig);
     return LK_OK;
 }
 
@@ -44,7 +43,7 @@ static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed)
         return 0;
     }
     lk_log(S, "V[] timer: %d: %u", *pi, elapsed);
-    lk_emitstring(echo, 0, 0, "Hello World!");
+    lk_emitstring(echo, 0, "Hello World!");
     return 1000;
 }
 
@@ -85,14 +84,14 @@ static int my_monitor(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     }
     if (sig->type == 0)
         lk_log(S, "T[monitor] service '%s' required by '%s'!",
-                (char*)sig->data, (char*)sig->src);
+                (char*)sig->data, (char*)sig->sender);
     else if (sig->type == 1)
         lk_log(S, "T[monitor] service '%s' launched by '%s'!",
-                (char*)sig->data, (char*)sig->src);
+                (char*)sig->data, (char*)sig->sender);
     else if (sig->type == 2)
-        lk_log(S, "T[monitor] service '%s' mark weak!", (char*)sig->src);
+        lk_log(S, "T[monitor] service '%s' mark weak!", (char*)sig->sender);
     else if (sig->type == 3)
-        lk_log(S, "T[monitor] service '%s' closed!", (char*)sig->src);
+        lk_log(S, "T[monitor] service '%s' closed!", (char*)sig->sender);
     return LK_OK;
 }
 
@@ -117,7 +116,7 @@ int main(void) {
     lk_launch(S, "echo", loki_service_echo, NULL);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");
-    lk_emitstring(slot, 0, 0, "Hello World!");
+    lk_emitstring(slot, 0, "Hello World!");
 
     lk_log(S, "thread count: %d", lk_start(S, 0));
     lk_waitclose(S);
@@ -129,3 +128,4 @@ int main(void) {
 
 /* unixcc: flags+='-ggdb' input+='service_*.c' libs+='-pthread -ldl' */
 /* win32cc: flags+='-Wextra -O3' input+='service_*.c' libs+='-lws2_32' */
+
