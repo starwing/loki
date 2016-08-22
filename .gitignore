@@ -1,10 +1,16 @@
 *.exe
 *.dll
-*.so
+*.exp
+*.ilk
+*.lib
 *.obj
+*.pdb
+*.lastcodeanalysissucceeded
 *.o
+*.so
 *.un~
 *_test
+loki_test
 logs/
 *.dSYM/
 .vscode/

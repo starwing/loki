@@ -42,6 +42,7 @@ int main(void)
     return 0;
 }
 
-/* unixcc: flags+='-ggdb -O0' input+='service_*.c' libs+='-pthread -ldl' */
-/* win32cc: flags+='-Wextra -O3' input+='service_*.c' libs+='-lws2_32' */
+/* cc: flags+='-Wextra -ggdb -O0' input+='service_*.c'
+ * unixcc: libs+='-pthread -ldl'
+ * win32cc: libs+='-lws2_32' */
 
