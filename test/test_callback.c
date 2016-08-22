@@ -2,6 +2,7 @@
 #include "../loki_services.h"
 
 static int on_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    (void)slot;
     if (sig->source)
         lk_log(S, "echo: %d: %s", (int)(ptrdiff_t)sig->source->ud, sig->data);
     else
@@ -13,6 +14,7 @@ static int on_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 
 static int on_echo_return(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     int count = (int)(ptrdiff_t)sig->source->ud;
+    (void)slot;
     lk_log(S, "echo callback: %d: %s", count, sig->data);
     if (count != 0) {
         lk_Slot *echo = lk_slot(S, "root.echo");

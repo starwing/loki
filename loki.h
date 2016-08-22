@@ -1468,7 +1468,7 @@ static void lkS_callslot (lk_State *S, lk_SignalNode *node, lk_Context *ctx) {
     ctx->current = slot;
     slot->coming_source = source;
     if (!slot->no_refactor) {
-        lk_Handler *refactor = sender->refactor ?
+        lk_Handler *const refactor = sender->refactor ?
             sender->refactor : sender->service->slot.refactor;
         if (refactor != NULL)
             lk_try(S, ctx, ret = refactor(S, slot, &node->data));
