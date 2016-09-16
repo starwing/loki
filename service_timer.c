@@ -99,7 +99,7 @@ static int lkX_resizeheap(lk_TimerState *ts, size_t size) {
     heap = (lk_Timer**)lk_realloc(ts->S, ts->heap,
             realsize*sizeof(lk_Timer*), ts->heap_size*sizeof(lk_Timer*));
     ts->heap = heap;
-    ts->heap_size = realsize;
+    ts->heap_size = (unsigned)realsize;
     return 1;
 }
 

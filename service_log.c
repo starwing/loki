@@ -357,15 +357,15 @@ static void lkX_screendump(lk_LogState *ls, const char *s, size_t len, int color
     if (color & 0x20) attr |= BACKGROUND_GREEN;
     if (color & 0x40) attr |= BACKGROUND_BLUE;
     if (color & 0x80) attr |= BACKGROUND_INTENSITY;
-    bytes = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, NULL, 0);
+    bytes = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, (int)len, NULL, 0);
     lk_initbuffer(ls->S, &B);
     if (bytes != 0) {
         buff = (LPWSTR)lk_prepbuffsize(&B, bytes * sizeof(WCHAR));
-        bytes = MultiByteToWideChar(cp, 0, s, len, buff, bytes);
+        bytes = MultiByteToWideChar(cp, 0, s, (int)len, buff, bytes);
     }
     SetConsoleTextAttribute(h, attr);
     if (buff) WriteConsoleW(h, buff, bytes, &written, NULL);
-    else      WriteConsoleA(h, s, len, &written, NULL);
+    else      WriteConsoleA(h, s, (DWORD)len, &written, NULL);
     SetConsoleTextAttribute(h, reset);
     lk_freebuffer(&B);
 	WriteConsoleA(h, &eol, 1, &written, NULL);

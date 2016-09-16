@@ -251,8 +251,9 @@ static lk_Udp *lkX_prepareudp(lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
     udp->service = svr;
     udp->handlers = lkX_gethandlers(zs, svr);
     zn_initbuffer(&udp->buff);
-    ret = zn_recvfrom(zudp, zn_buffer(&udp->buff), zn_bufflen(&udp->buff),
-            lkX_onrecvfrom, udp);
+    ret = zn_recvfrom(zudp,
+        zn_buffer(&udp->buff), (unsigned)zn_bufflen(&udp->buff),
+        lkX_onrecvfrom, udp);
     if (ret != ZN_OK) {
         lk_log(zs->S, "E[recvfrom]" lk_loc("[%p] %s"), udp, zn_strerror(ret));
         zn_deludp(zudp);
@@ -349,7 +350,7 @@ static void lkX_onsend (void *ud, zn_Tcp *ztcp, unsigned err, unsigned count) {
     if (err == ZN_OK) {
         if (zn_sendfinish(&tcp->send, count))
             err = zn_send(tcp->tcp,
-                    zn_sendbuff(&tcp->send), zn_sendsize(&tcp->send),
+                    zn_sendbuff(&tcp->send), (unsigned)zn_sendsize(&tcp->send),
                     lkX_onsend, ud);
         else if (tcp->closing) {
             lk_log(zs->S, "I[close]" lk_loc("[%p] tcp closed"), tcp);
@@ -453,7 +454,8 @@ static void lkX_poster (void *ud, zn_State *S) {
         int ret = ZN_OK;
         size_t size = lk_len((lk_Data*)cmd->data);
         if (tcp->tcp && zn_sendprepare(&tcp->send, (char*)cmd->data, size))
-            ret = zn_send(tcp->tcp, zn_sendbuff(&tcp->send), zn_sendsize(&tcp->send),
+            ret = zn_send(tcp->tcp,
+                zn_sendbuff(&tcp->send), (unsigned)zn_sendsize(&tcp->send),
                         lkX_onsend, tcp);
         lk_deldata(zs->S, (lk_Data*)cmd->data);
         if (ret != ZN_OK) {
@@ -487,7 +489,8 @@ static void lkX_poster (void *ud, zn_State *S) {
     case LK_CMD_UDP_SENDTO: {
         lk_Udp *udp = cmd->u.udp;
         size_t size = lk_len((lk_Data*)cmd->data);
-        int ret = udp->udp ? zn_sendto(udp->udp, (char*)cmd->data, size,
+        int ret = udp->udp ? zn_sendto(udp->udp,
+                (char*)cmd->data, (unsigned)size,
                 cmd->info.addr, cmd->info.port) : ZN_OK;
         lk_deldata(zs->S, (lk_Data*)cmd->data);
         if (ret != ZN_OK) {
@@ -499,7 +502,7 @@ static void lkX_poster (void *ud, zn_State *S) {
     case LK_CMD_UDP_RECVFROM: {
         lk_Udp *udp = cmd->u.udp;
         int ret = udp->udp ? zn_recvfrom(udp->udp,
-                zn_buffer(&udp->buff), zn_bufflen(&udp->buff),
+                zn_buffer(&udp->buff), (unsigned)zn_bufflen(&udp->buff),
                 lkX_onrecvfrom, udp) : ZN_OK;
         if (ret != ZN_OK) {
             lk_log(zs->S, "W[recvfrom]" lk_loc("[%p] %s"), udp, zn_strerror(ret));
