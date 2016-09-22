@@ -138,28 +138,31 @@ static void lkX_createdirs(lk_State *S, const char *path) {
     lk_freebuffer(&B);
 }
 
-static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
-    lk_Buffer B;
+static void lkX_escapefn(lk_Buffer *B, const char *s, int idx) {
     struct tm tm;
-    const char *s;
     lkX_localtime(time(NULL), &tm);
-    lk_initbuffer(ls->S, &B);
-    for (s = dumper->name; *s != '\0'; ++s) {
+    for (; *s != '\0'; ++s) {
         if (*s != '%') {
-            lk_addchar(&B, *s);
+            lk_addchar(B, *s);
             continue;
         }
         switch (*++s) {
-        case 'Y':  lk_addfstring(&B, "%04d", tm.tm_year + 1900); break;
-        case 'M':  lk_addfstring(&B, "%02d", tm.tm_mon + 1); break;
-        case 'D':  lk_addfstring(&B, "%02d", tm.tm_mday); break;
-        case 'I':  lk_addfstring(&B, "%d", dumper->index); break;
-        case '\0': lk_addchar(&B, '%'); --s; break;
-        default:   lk_addchar(&B, '%'); /* FALLTHROUGH */
-        case '%':  lk_addchar(&B, *s); break;
+        case 'Y':  lk_addfstring(B, "%04d", tm.tm_year + 1900); break;
+        case 'M':  lk_addfstring(B, "%02d", tm.tm_mon + 1); break;
+        case 'D':  lk_addfstring(B, "%02d", tm.tm_mday); break;
+        case 'I':  lk_addfstring(B, "%d", idx); break;
+        case '\0': lk_addchar(B, '%'); --s; break;
+        default:   lk_addchar(B, '%'); /* FALLTHROUGH */
+        case '%':  lk_addchar(B, *s); break;
         }
     }
-    lk_addchar(&B, '\0');
+    lk_addchar(B, '\0');
+}
+
+static void lkX_openfile(lk_LogState *ls, lk_Dumper* dumper) {
+    lk_Buffer B;
+    lk_initbuffer(ls->S, &B);
+    lkX_escapefn(&B, dumper->name, dumper->index);
     lkX_createdirs(ls->S, lk_buffer(&B));
 #ifdef _MSC_VER
     fopen_s(&dumper->fp, lk_buffer(&B), "a");
@@ -434,6 +437,16 @@ static lk_LogState *lkX_newstate(lk_State *S) {
 }
 
 static void lkX_delstate(lk_LogState* ls) {
+    lk_Entry *e = NULL;
+    while (lk_nextentry(&ls->config, &e)) {
+        lk_LogConfig *config = (lk_LogConfig*)e->key;
+        lk_poolfree(&ls->configs, config);
+    }
+    while (lk_nextentry(&ls->dump, &e)) {
+        lk_Dumper *dumper = (lk_Dumper*)e->key;
+        if (dumper && dumper->fp) fclose(dumper->fp);
+        lk_poolfree(&ls->dumpers, dumper);
+    }
     lk_freetable(ls->S, &ls->config);
     lk_freetable(ls->S, &ls->dump);
     lk_freepool(ls->S, &ls->configs);
@@ -459,21 +472,45 @@ static int lkX_update(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
-LKMOD_API int loki_service_log(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_LogState *ls = (lk_LogState*)lk_data(slot);
-    if (slot == NULL) {
-        lk_Service *svr = lk_self(S);
+static int lkX_launch(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_LogState *ls = (lk_LogState*)lk_data(lk_current(S));
+    const char *msg = (const char*)sig->data;
+    lk_Data *data = lk_newfstring(S, "V[] service '%s'(%p) launched", msg, msg);
+    lkX_writelog(ls, (const char*)sender, (const char*)data, lk_len(data));
+    lk_deldata(S, data);
+    return LK_OK;
+}
+
+static int lkX_close(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_LogState *ls = (lk_LogState*)lk_data(lk_current(S));
+    const char *msg = (const char*)sig->data;
+    lk_Data *data = lk_newfstring(S, "V[] service '%s'(%p) closed", msg, msg);
+    lkX_writelog(ls, (const char*)sender, (const char*)data, lk_len(data));
+    lk_deldata(S, data);
+    return LK_OK;
+}
+
+LKMOD_API int loki_service_log(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_LogState *ls = (lk_LogState*)lk_data(lk_current(S));
+    if (sender == NULL) {
         ls = lkX_newstate(S);
-        lk_setdata((lk_Slot*)svr, ls);
+        lk_setdata(lk_current(S), ls);
         lk_newslot(S, "update", lkX_update, ls);
+        lk_newslot(S, "launch", lkX_launch, ls);
+        lk_newslot(S, "close", lkX_close, ls);
         return LK_WEAK;
     }
-    else if (!sig)
+    else if (sig == NULL) {
+        const char *msg = (const char*)lk_self(S);
+        lk_Data *data = lk_newfstring(S, "V[] service '%s'(%p) closed", msg, msg);
+        lkX_writelog(ls, (const char*)sender, (const char*)data, lk_len(data));
+        lk_deldata(S, data);
         lkX_delstate(ls);
+    }
     else {
-        const char *s = (const char*)sig->data;
-        size_t len = sig->isdata ? lk_len((lk_Data*)sig->data) : strlen(s);
-        lkX_writelog(ls, (const char*)lk_service(sig->sender), s, len);
+        const char *msg = (const char*)sig->data;
+        size_t len = sig->isdata ? lk_len((lk_Data*)sig->data) : strlen(msg);
+        lkX_writelog(ls, (const char*)sender, msg, len);
     }
     return LK_OK;
 }

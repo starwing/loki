@@ -6,7 +6,7 @@
 #include "znet/zn_buffer.h"
 
 
-#define lkX_getstate(svr) ((lk_ZNetState*)lk_data((lk_Slot*)svr))
+#define lkX_getstate(S) ((lk_ZNetState*)lk_data((lk_Slot*)lk_self(S)))
 
 #define lkX_getpooled(var,type) type *var;  do { \
     lk_lock(zs->lock);                           \
@@ -38,17 +38,17 @@
     lk_unlock(zs->lock);                       } while (0)
 
 typedef struct lk_ZNetState {
-    lk_Slot *poll;
-    lk_State *S;
-    zn_State *zs;
-    volatile unsigned closing;
-    lk_Table hmap;
+    lk_Slot   *poll;
+    lk_State  *S;
+    zn_State  *zs;
+    unsigned   closing;
+    lk_Table   handler_map;
     lk_MemPool cmds;
     lk_MemPool accepts;
     lk_MemPool handlers;
-    lk_Tcp *tcps, *freed_tcps;
-    lk_Udp *udps, *freed_udps;
-    lk_Lock lock; /* lock of freed */
+    lk_Tcp    *tcps, *freed_tcps;
+    lk_Udp    *udps, *freed_udps;
+    lk_Lock    lock; /* lock of freed */
 } lk_ZNetState;
 
 typedef struct lk_RecvHandlers {
@@ -147,7 +147,7 @@ static lk_ZNetState *lkX_newstate (lk_State *S) {
     zn_initialize();
     if (!lk_initlock(&zs->lock))          goto err_lock;
     if ((zs->zs = zn_newstate()) == NULL) goto err_znet;
-    lk_inittable(&zs->hmap, sizeof(lk_HandlersEntry));
+    lk_inittable(&zs->handler_map, sizeof(lk_HandlersEntry));
     lk_initpool(&zs->cmds,    sizeof(lk_PostCmd));
     lk_initpool(&zs->accepts, sizeof(lk_Accept));
     lk_initpool(&zs->handlers, sizeof(lk_RecvHandlers));
@@ -164,7 +164,7 @@ static lk_RecvHandlers *lkX_gethandlers(lk_ZNetState *zs, lk_Service *svr) {
     lk_HandlersEntry *e;
     lk_RecvHandlers *hs = NULL;
     lk_lock(zs->lock);
-    e = (lk_HandlersEntry*)lk_gettable(&zs->hmap, (const char*)svr);
+    e = (lk_HandlersEntry*)lk_gettable(&zs->handler_map, (const char*)svr);
     if (e) hs = (lk_RecvHandlers*)e->handlers;
     lk_unlock(zs->lock);
     return hs;
@@ -175,9 +175,9 @@ static void lkX_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
     cmd->info.port = port;
 }
 
-static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_ZNetState *zs = lkX_getstate(slot);
-    (void)slot, (void)sig;
+static int lkX_poller (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_ZNetState *zs = lkX_getstate(S);
+    (void)sender, (void)sig;
     while (!zs->closing)
         zn_run(zs->zs, ZN_RUN_LOOP);
     lk_free(S, zs, sizeof(lk_ZNetState));
@@ -186,11 +186,14 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 
 static void lkX_postdeletor (void *ud, zn_State *S) {
     lk_ZNetState *zs = (lk_ZNetState*)ud;
+    lk_PtrEntry *e = NULL;
     (void)S;
     zs->closing = 1;
     zn_close(zs->zs);
     zn_deinitialize();
-    lk_freetable(zs->S, &zs->hmap);
+    while (lk_nextentry(&zs->handler_map, (lk_Entry**)&e))
+        if (e->data) lk_poolfree(&zs->handlers, e->data);
+    lk_freetable(zs->S, &zs->handler_map);
     lk_freepool(zs->S, &zs->cmds);
     lk_freepool(zs->S, &zs->accepts);
     lk_freepool(zs->S, &zs->handlers);
@@ -265,7 +268,7 @@ static lk_Udp *lkX_prepareudp(lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
 }
 
 static void lkX_deltcp(lk_Tcp *tcp) {
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     if (tcp->tcp) {
         zn_deltcp(tcp->tcp);
         zn_resetrecvbuffer(&tcp->recv);
@@ -279,7 +282,7 @@ static void lkX_deltcp(lk_Tcp *tcp) {
 }
 
 static void lkX_accepterror(lk_Accept *accept, unsigned err) {
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_ACCEPT_LISTEN;
     sig.data = accept;
     accept->error = err;
@@ -289,7 +292,7 @@ static void lkX_accepterror(lk_Accept *accept, unsigned err) {
 static void lkX_onaccept (void *ud, zn_Accept *zaccept, unsigned err, zn_Tcp *ztcp) {
     lk_Accept *accept = (lk_Accept*)ud;
     lk_ZNetState *zs = accept->zs;
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_ACCEPT_LISTEN;
     sig.data = accept;
     accept->error = err;
@@ -311,7 +314,7 @@ static void lkX_onaccept (void *ud, zn_Accept *zaccept, unsigned err, zn_Tcp *zt
 static void lkX_onconnect (void *ud, zn_Tcp *ztcp, unsigned err) {
     lk_PostCmd *cmd = (lk_PostCmd*)ud;
     lk_ZNetState *zs = cmd->zs;
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_TCP_CONNECT;
     sig.data = cmd;
     cmd->error = err;
@@ -331,7 +334,7 @@ static void lkX_onconnect (void *ud, zn_Tcp *ztcp, unsigned err) {
 static void lkX_onrecv (void *ud, zn_Tcp *ztcp, unsigned err, unsigned count) {
     lk_Tcp *tcp = (lk_Tcp*)ud;
     lk_ZNetState *zs = tcp->zs;
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_TCP_RECV;
     sig.data = tcp;
     tcp->error = err;
@@ -368,7 +371,7 @@ static void lkX_onsend (void *ud, zn_Tcp *ztcp, unsigned err, unsigned count) {
 static void lkX_onrecvfrom (void *ud, zn_Udp *zudp, unsigned err, unsigned count, const char *addr, unsigned port) {
     lk_Udp *udp = (lk_Udp*)ud;
     lk_ZNetState *zs = udp->zs;
-    lk_Signal sig = LK_SIGNAL;
+    lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_UDP_RECVFROM;
     sig.data = udp;
     udp->error = err;
@@ -437,7 +440,7 @@ static void lkX_poster (void *ud, zn_State *S) {
         int ret = tcp == NULL ? ZN_ERROR : zn_connect(tcp,
             cmd->info.addr, cmd->info.port, lkX_onconnect, cmd);
         if (ret != ZN_OK) {
-            lk_Signal sig = LK_SIGNAL;
+            lk_Signal sig = LK_RESPONSE;
             lk_log(zs->S, "E[connect]" lk_loc("%s (%s:%d)"),
                     tcp ? zn_strerror(ret) : "can not create zn_Tcp",
                     cmd->info.addr, cmd->info.port);
@@ -474,7 +477,7 @@ static void lkX_poster (void *ud, zn_State *S) {
         }
     } break;
     case LK_CMD_UDP_BIND: {
-        lk_Signal sig = LK_SIGNAL;
+        lk_Signal sig = LK_RESPONSE;
         zn_Udp *zudp = zn_newudp(zs->zs, cmd->info.addr, cmd->info.port);
         if (zudp != NULL)
             cmd->u.udp = lkX_prepareudp(zs, cmd->service, zudp);
@@ -519,9 +522,9 @@ static void lkX_post (lk_PostCmd *cmd) {
         lk_log(cmd->zs->S, "E[socket]" lk_loc("zn_post() error"));
 }
 
-static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_ZNetState *zs = lkX_getstate(sig->sender);
-    (void)slot;
+static int lkX_refactor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)lk_service(sender));
+    (void)sender;
     switch (sig->type) {
     default: return LK_ERR;
 
@@ -593,7 +596,7 @@ static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
 
 static lk_RecvHandlers *lkX_sethandlers (lk_ZNetState *zs) {
     lk_HandlersEntry *e =
-        (lk_HandlersEntry*)lk_settable(zs->S, &zs->hmap, (const char*)lk_self(zs->S));
+        (lk_HandlersEntry*)lk_settable(zs->S, &zs->handler_map, (const char*)lk_self(zs->S));
     if (e->handlers == NULL) {
         e->handlers = (lk_RecvHandlers*)lk_poolalloc(zs->S, &zs->handlers);
         memset(e->handlers, 0, sizeof(lk_RecvHandlers));
@@ -602,7 +605,7 @@ static lk_RecvHandlers *lkX_sethandlers (lk_ZNetState *zs) {
 }
 
 LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lk_RecvHandlers *hs;
     lk_lock(zs->lock);
     hs = lkX_sethandlers(zs);
@@ -612,7 +615,7 @@ LK_API void lk_setonheader (lk_Service *svr, lk_HeaderHandler *h, void *ud) {
 }
 
 LK_API void lk_setonpacket (lk_Service *svr, lk_PacketHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lk_RecvHandlers *hs;
     lk_lock(zs->lock);
     hs = lkX_sethandlers(zs);
@@ -622,7 +625,7 @@ LK_API void lk_setonpacket (lk_Service *svr, lk_PacketHandler *h, void *ud) {
 }
 
 LK_API void lk_setonudpmsg (lk_Service *svr, lk_RecvFromHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lk_RecvHandlers *hs;
     lk_lock(zs->lock);
     hs = lkX_sethandlers(zs);
@@ -632,7 +635,7 @@ LK_API void lk_setonudpmsg (lk_Service *svr, lk_RecvFromHandler *h, void *ud) {
 }
 
 LK_API lk_Accept *lk_newaccept (lk_Service *svr, lk_AcceptHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lkX_getpooled(accept, lk_Accept);
     accept->service = lk_self(zs->S);
     accept->handler = h;
@@ -660,7 +663,7 @@ LK_API void lk_listen (lk_Accept *accept, const char *addr, unsigned port) {
 }
 
 LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port, lk_ConnectHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lkX_getpooled(cmd, lk_PostCmd);
     cmd->service = lk_self(zs->S);
     cmd->cmd = LK_CMD_TCP_CONNECT;
@@ -706,7 +709,7 @@ LK_API void lk_send (lk_Tcp *tcp, const char *buff, unsigned size) {
 }
 
 LK_API void lk_bindudp (lk_Service *svr, const char *addr, unsigned port, lk_UdpBindHandler *h, void *ud) {
-    lk_ZNetState *zs = lkX_getstate(svr);
+    lk_ZNetState *zs = (lk_ZNetState*)lk_data((lk_Slot*)svr);
     lkX_getpooled(cmd, lk_PostCmd);
     cmd->service = lk_self(zs->S);
     cmd->cmd = LK_CMD_UDP_BIND;
@@ -739,8 +742,8 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned size, const char 
 
 /* entry point */
 
-LKMOD_API int loki_service_socket (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    if (slot == NULL) {
+LKMOD_API int loki_service_socket (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    if (sender == NULL) {
         lk_ZNetState *zs = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
         zs->poll = lk_newpoll(S, "poll", lkX_poller, zs);
@@ -749,7 +752,7 @@ LKMOD_API int loki_service_socket (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         return LK_WEAK;
     }
     else if (sig == NULL) {
-        lk_ZNetState *zs = lkX_getstate(slot);
+        lk_ZNetState *zs = lkX_getstate(S);
         zn_post(zs->zs, lkX_postdeletor, zs);
     }
     return LK_OK;

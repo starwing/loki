@@ -1,39 +1,36 @@
 #define LOKI_IMPLEMENTATION
 #include "../loki_services.h"
 
-static int on_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    (void)slot;
+static int on_echo(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     if (sig->source)
         lk_log(S, "echo: %d: %s", (int)(ptrdiff_t)sig->source->ud, sig->data);
     else
         lk_log(S, "echo: %s", sig->data);
     sig->isack = 1;
-    lk_emit((lk_Slot*)lk_service(sig->sender), sig);
+    lk_emit((lk_Slot*)lk_service(sender), sig);
     return LK_OK;
 }
 
-static int on_poll(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+static int on_poll(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     int i = 0;
-    (void)slot, (void)sig;
     for (;;) {
-        lk_Signal sig;
         lk_log(S, "poll: in loop %d", i++);
-        if (lk_wait(S, &sig, -1) != LK_OK)
+        if (lk_wait(S, sig, -1) != LK_OK)
             break;
-        if (sig.source)
-            lk_log(S, "poll: %d: %s", (int)(ptrdiff_t)sig.source->ud, sig.data);
+        if (sig->source)
+            lk_log(S, "poll: %d: %s", (int)(ptrdiff_t)sig->source->ud, sig->data);
         else
-            lk_log(S, "poll: %s", sig.data);
-        sig.isack = 1;
-        lk_emit((lk_Slot*)lk_service(sig.sender), &sig);
+            lk_log(S, "poll: %s", sig->data);
+        sig->isack = 1;
+        lk_emit((lk_Slot*)lk_service(sender), sig);
     }
     lk_log(S, "poll: exiting...");
     return LK_OK;
 }
 
-static int on_echo_return(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+static int on_echo_return(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     int count = (int)(ptrdiff_t)sig->source->ud;
-    (void)slot;
+    (void)sender;
     lk_log(S, "echo callback: %d: %s", count, sig->data);
     if (count != 0) {
         lk_Slot *echo = lk_slot(S, "echo");

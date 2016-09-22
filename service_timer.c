@@ -57,7 +57,7 @@ LK_API lk_Time lk_time(void) {
 
 /* implements */
 
-#define lkX_getstate(svr)  ((lk_TimerState*)lk_data((lk_Slot*)svr))
+#define lkX_getstate(svr)  ((lk_TimerState*)lk_data((lk_Slot*)(svr)))
 
 #define LK_TIMER_NOINDEX (~(unsigned)0)
 #define LK_FOREVER       (~(lk_Time)0)
@@ -196,7 +196,7 @@ LK_API void lk_canceltimer(lk_Timer *timer) {
 static void lkX_updatetimers(lk_TimerState *ts, lk_Time current) {
     if (ts->nexttime > current) return;
     while (ts->heap_used && ts->heap[0]->emittime <= current) {
-        lk_Signal sig = LK_SIGNAL;
+        lk_Signal sig = LK_RESPONSE;
         lk_Timer *timer = ts->heap[0];
         lkX_canceltimer(ts, timer);
         timer->emittime = current;
@@ -217,10 +217,9 @@ static lk_TimerState *lkX_newstate (lk_State *S) {
     return ts;
 }
 
-static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = (lk_TimerState*)lk_data(slot);
+static int lkX_poller (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_TimerState *ts = (lk_TimerState*)lk_data(sender);
     lk_Time nexttime, current;
-    (void)sig;
     for (;;) {
         int waittime;
         lk_lock(ts->lock);
@@ -230,7 +229,7 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         lk_unlock(ts->lock);
         waittime = nexttime == LK_FOREVER ? -1
             : (int)(nexttime - current);
-        if (lk_wait(S, NULL, waittime) == LK_ERR)
+        if (lk_wait(S, sig, waittime) == LK_ERR)
             break;
     }
     ts->nexttime = LK_FOREVER;
@@ -241,10 +240,9 @@ static int lkX_poller (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
-static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    lk_TimerState *ts = lkX_getstate(sig->sender);
+static int lkX_refactor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_TimerState *ts = lkX_getstate(sender);
     lk_Timer *timer = (lk_Timer*)sig->data;
-    (void)slot;
     if (timer->handler) {
         int ret = timer->handler(S, timer->u.ud, timer,
                 timer->emittime - timer->starttime);
@@ -258,9 +256,9 @@ static int lkX_refactor (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
-LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     (void)sig;
-    if (slot == NULL) {
+    if (sender == NULL) {
         lk_TimerState *ts = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
         ts->poll = lk_newpoll(S, "poll", lkX_poller, ts);

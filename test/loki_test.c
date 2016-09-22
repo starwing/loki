@@ -24,12 +24,11 @@ static void *debug_allocf(void *ud, void *ptr, size_t size, size_t osize) {
     return newptr;
 }
 
-static int echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    (void)slot;
+static int echo(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     lk_log(S, "msg: %s", (char*)sig->data);
     lk_log(S, "T[]" lk_loc("get msg: [%s]"), (char*)sig->data);
     sig->isack = 1;
-    lk_emit((lk_Slot*)lk_service(sig->sender), sig);
+    lk_emit((lk_Slot*)lk_service(sender), sig);
     return LK_OK;
 }
 
@@ -47,8 +46,8 @@ static lk_Time repeater(lk_State *S, void *ud, lk_Timer *timer, lk_Time elapsed)
     return 1000;
 }
 
-static int resp(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    (void)slot;
+static int resp(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    (void)sender;
     if (sig != NULL) {
         lk_log(S, "res: %s", (char*)sig->data);
         lk_close(S);
@@ -56,9 +55,9 @@ static int resp(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
     return LK_OK;
 }
 
-static int loki_service_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+static int loki_service_echo(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     (void)sig;
-    if (slot == NULL) {
+    if (sender == NULL) {
         lk_Service *svr = lk_launch(S, "timer", loki_service_timer, NULL);
         lk_Timer *t;
         int *pi = (int*)lk_malloc(S, sizeof(int));
@@ -67,31 +66,6 @@ static int loki_service_echo(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         t = lk_newtimer(svr, repeater, (void*)pi);
         lk_starttimer(t, 1000);
     }
-    return LK_OK;
-}
-
-static int my_monitor(lk_State *S, lk_Slot *slot, lk_Signal *sig) {
-    if (slot == NULL) {
-        lk_log(S, "T[monitor] initialized!");
-        int *p = lk_malloc(S, sizeof(int));
-        lk_setdata(lk_current(S), p);
-        return LK_WEAK;
-    }
-    else if (sig == NULL) {
-        lk_log(S, "T[monitor] shutdown!");
-        lk_free(S, lk_data(slot), sizeof(int));
-        return LK_OK;
-    }
-    if (sig->type == 0)
-        lk_log(S, "T[monitor] service '%s' required by '%s'!",
-                (char*)sig->data, (char*)sig->sender);
-    else if (sig->type == 1)
-        lk_log(S, "T[monitor] service '%s' launched by '%s'!",
-                (char*)sig->data, (char*)sig->sender);
-    else if (sig->type == 2)
-        lk_log(S, "T[monitor] service '%s' mark weak!", (char*)sig->sender);
-    else if (sig->type == 3)
-        lk_log(S, "T[monitor] service '%s' closed!", (char*)sig->sender);
     return LK_OK;
 }
 
@@ -112,7 +86,6 @@ int main(void) {
     lk_log(S, "W[test]" lk_loc("test test test"));
     lk_log(S, "E[test]" lk_loc("你好，世界"));
 
-    lk_launch(S, "monitor", my_monitor, NULL);
     lk_launch(S, "echo", loki_service_echo, NULL);
 
     lk_Slot *slot = lk_slot(S, "echo.echo");

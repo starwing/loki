@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 static void on_tcp(lk_State *S, void *ud, unsigned err, lk_Accept *accept, lk_Tcp *tcp) {
+    lk_log(S, "connected, send something...");
     lk_send(tcp, "Hello World!", 12);
     lk_deltcp(tcp);
     lk_delaccept(accept);
@@ -12,7 +13,7 @@ static void on_tcp(lk_State *S, void *ud, unsigned err, lk_Accept *accept, lk_Tc
 
 static size_t on_header(lk_State *S, void *ud, lk_Tcp *tcp, const char *s, size_t len) {
     if (s) {
-        printf("%.*s\n", (int)len, s);
+        lk_log(S, "recieved: [%.*s](%d), closing", (int)len, s, (int)len);
         lk_close(S);
     }
     return len;
@@ -35,5 +36,5 @@ int main(void) {
 }
 
 /* unixcc: flags+='-ggdb' input+='service_*.c' libs+='-pthread -ldl' */
-/* win32cc: cc='clang' output='test_socket.exe' input+='service_*.c' libs+='-lws2_32' */
+/* win32cc: output='test_socket.exe' input+='service_*.c' libs+='-lws2_32' */
 

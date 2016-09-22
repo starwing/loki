@@ -4,7 +4,6 @@
 
 #include "loki.h"
 #include "lk_buffer.h"
-#include "lk_notify.h"
 
 LK_NS_BEGIN
 
@@ -13,7 +12,6 @@ LK_NS_BEGIN
 
 LKMOD_API lk_Handler loki_service_loader;
 LKMOD_API lk_Handler loki_service_log;
-LKMOD_API lk_Handler loki_service_monitor;
 LKMOD_API lk_Handler loki_service_socket;
 LKMOD_API lk_Handler loki_service_timer;
 
@@ -36,16 +34,6 @@ LK_API void lk_addloader (lk_Service *svr, lk_LoaderHandler *h, void *ud);
 LK_API void lk_delloader (lk_Service *svr, lk_LoaderHandler *h, void *ud);
 
 LK_API lk_Service *lk_require (lk_Service *svr, const char *name);
-
-
-/* monitor interface */
-
-typedef struct lk_Monitor lk_Monitor;
-
-typedef void lk_MonitorHandler (lk_State *S, void *ud, int event, lk_Service *svrs[2]);
-
-LK_API void lk_addmonitor (lk_Service *svr, int event, lk_MonitorHandler *cbs, void *ud);
-LK_API void lk_delmonitor (lk_Service *svr, int event, lk_MonitorHandler *cbs, void *ud);
 
 
 /* timer interface */
