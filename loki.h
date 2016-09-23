@@ -125,7 +125,9 @@ LK_API int lk_dellistener (lk_State *S, lk_Slot *slot, lk_Handler *h, void *ud);
 
 LK_API int lk_wait (lk_State *S, lk_Signal *sig, int waitms);
 
+LK_API void lk_initsource  (lk_State *S, lk_Source *src, lk_Handler *h, void *ud);
 LK_API void lk_setcallback (lk_State *S, lk_Handler *h, void *ud);
+
 LK_API int  lk_emit        (lk_Slot *slot, const lk_Signal *sig);
 LK_API int  lk_emitstring  (lk_Slot *slot, unsigned type, const char *s);
 
@@ -675,9 +677,9 @@ LK_API lk_Data *lk_newdata (lk_State *S, size_t size) {
     size_t rawlen = sizeof(lk_Data) + size;
     lk_Data *data = (lk_Data*)lk_malloc(S, rawlen);
     assert(size < LK_MAX_DATASIZE);
-    data->size = (unsigned)size;
-    data->refcount  = 0;
-    data->len  = 0;
+    data->size     = (unsigned)size;
+    data->len      = 0;
+    data->refcount = 0;
     if (rawlen <= LK_SMALLPIECE_LEN)
         data->size = LK_SMALLPIECE_LEN - sizeof(lk_Data);
     return data + 1;
@@ -696,8 +698,7 @@ LK_API size_t lk_deldata (lk_State *S, lk_Data *data) {
     size_t refcount = 0;
     if (data-- == NULL) return 0;
     lk_lock(S->lock);
-    if (data->refcount > 1)
-        refcount = --data->refcount;
+    if (data->refcount > 1) refcount = --data->refcount;
     lk_unlock(S->lock);
     if (refcount == 0) lk_free(S, data, data->size + sizeof(lk_Data));
     return refcount;
@@ -1367,6 +1368,13 @@ static int lkE_filterslot (lk_Table *t, lk_Entry **pe, const char *name) {
     }
 }
 
+LK_API void lk_initsource (lk_State *S, lk_Source *src, lk_Handler *h, void *ud) {
+    memset(src, 0, sizeof(*src));
+    src->service  = lk_self(S);
+    src->callback = h;
+    src->ud       = ud;
+}
+
 LK_API void lk_setcallback (lk_State *S, lk_Handler *h, void *ud) {
     lk_Slot *slot = lk_current(S);
     lk_Source *src;
@@ -1376,11 +1384,8 @@ LK_API void lk_setcallback (lk_State *S, lk_Handler *h, void *ud) {
     lk_lock(S->pool_lock);
     src = (lk_Source*)lk_poolalloc(S, &S->sources);
     lk_unlock(S->pool_lock);
-    memset(src, 0, sizeof(*src));
-    src->service  = lk_self(S);
-    src->callback = h;
+    lk_initsource(S, src, h, ud);
     src->deletor  = lkE_srcdeletor;
-    src->ud       = ud;
     slot->source  = src;
 }
 
@@ -1518,17 +1523,15 @@ static int lkL_srcdeletor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     return LK_OK;
 }
 
-static lk_Listener *lkL_newlistener (lk_Service *svr, lk_Slot *slot) {
-    lk_State *S = svr->slot.S;
+static lk_Listener *lkL_newlistener (lk_State *S, lk_Handler *h, void *ud) {
     lk_Listener *node;
     lk_lock(S->pool_lock);
     node = (lk_Listener*)lk_poolalloc(S, &S->listeners);
     lk_unlock(S->pool_lock);
-    memset(node, 0, sizeof(*node));
-    node->target  = slot;
-    node->source.service = svr;
+    lk_initsource(S, &node->source, h, ud);
     node->source.deletor = lkL_srcdeletor;
     node->source.refcount = 1;
+    node->source.force = 1;
     return node;
 }
 
@@ -1615,9 +1618,8 @@ LK_API int lk_addlistener (lk_State *S, lk_Slot *slot, lk_Handler *h, void *ud) 
     if (svr == NULL || slot == NULL
             || lkP_isdead(svr) || lkP_isdead(slot->service))
         return LK_ERR;
-    node = lkL_newlistener(svr, slot);
-    node->source.callback = h;
-    node->source.ud = ud;
+    node = lkL_newlistener(S, h, ud);
+    node->target = slot;
     lk_lock(svr->lock);
     if (lkL_register(S, svr, node) != LK_OK) {
         lk_lock(S->pool_lock);
