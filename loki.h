@@ -2000,28 +2000,27 @@ static void lkG_setconfig(lk_State *S, const char *key, const char *value) {
 }
 
 LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud) {
-    lk_State *S;
-    allocf = allocf ? allocf : default_allocf;
-    S = (lk_State*)allocf(ud, NULL, sizeof(lk_State), 0);
+    enum { TLS, EVT, LCK, QLK, CLK, PLK, TOTAL };
+    lk_Allocf *alloc = allocf ? allocf : default_allocf;
+    lk_State *S = (lk_State*)allocf(ud, NULL, sizeof(lk_State), 0);
+    unsigned ok = 0;
     if (S == NULL) return NULL;
     memset(S, 0, sizeof(*S));
-    S->allocf   = allocf;
-    S->alloc_ud = ud;
-    if (lk_inittls(&S->tls_index))     {
-    if (lk_initevent(&S->queue_event)) {
-    if (lk_initlock(&S->lock))         {
-    if (lk_initlock(&S->queue_lock))   {
-    if (lk_initlock(&S->config_lock))  {
-    if (lk_initlock(&S->pool_lock))    {
-    if (lkG_initstate(S, name) == LK_OK)
-        return S;
-      lk_freelock(S->pool_lock);
-    } lk_freelock(S->config_lock);
-    } lk_freelock(S->queue_lock);
-    } lk_freelock(S->lock);
-    } lk_freeevent(S->queue_event);
-    } lk_freetls(S->tls_index);
-    } free(S);
+    S->allocf = alloc, S->alloc_ud = ud;
+    if (lk_inittls(&S->tls_index))     ok |= 1<<TLS;
+    if (lk_initevent(&S->queue_event)) ok |= 1<<EVT;
+    if (lk_initlock(&S->lock))         ok |= 1<<LCK;
+    if (lk_initlock(&S->queue_lock))   ok |= 1<<QLK;
+    if (lk_initlock(&S->config_lock))  ok |= 1<<CLK;
+    if (lk_initlock(&S->pool_lock))    ok |= 1<<PLK;
+    if (ok == (1<<TOTAL)-1 && lkG_initstate(S, name) == LK_OK) return S;
+    if ((ok & (1<<PLK)) != 0) lk_freelock(S->pool_lock);
+    if ((ok & (1<<CLK)) != 0) lk_freelock(S->config_lock);
+    if ((ok & (1<<QLK)) != 0) lk_freelock(S->queue_lock);
+    if ((ok & (1<<LCK)) != 0) lk_freelock(S->lock);
+    if ((ok & (1<<EVT)) != 0) lk_freeevent(S->queue_event);
+    if ((ok & (1<<TLS)) != 0) lk_freetls(S->tls_index);
+    allocf(ud, S, 0, sizeof(lk_State));
     return NULL;
 }
 
