@@ -525,6 +525,14 @@ struct lk_State {
 
 /* memory management */
 
+#ifndef va_copy
+# ifdef __va_copy
+#  define va_copy __va_copy
+# else
+#  define va_copy(a,b) (*(a)=*(b))
+# endif
+#endif
+
 struct lk_Data {
     unsigned ref  : 16;
     unsigned size : 24;
@@ -549,7 +557,12 @@ LK_API int lk_vsnprintf (char *buff, size_t size, const char *fmt, va_list l) {
     return vsnprintf(buff, size, fmt, l);
 #else
     int count = -1;
-    if (size  !=  0) count = _vsnprintf_s(buff, size, _TRUNCATE, fmt, l);
+    if (size != 0) {
+        va_list nl;
+        va_copy(nl, l);
+        count = _vsnprintf_s(buff, size, _TRUNCATE, fmt, nl);
+        va_end(nl);
+    }
     if (count == -1) count = _vscprintf(fmt, l);
     return count;
 #endif
@@ -687,9 +700,12 @@ LK_API lk_Data *lk_newlstring (lk_State *S, const char *s, size_t len) {
 }
 
 LK_API lk_Data *lk_newvfstring (lk_State *S, const char *fmt, va_list l) {
+    va_list nl;
     lk_Data *data;
     int len;
-    len = lk_vsnprintf(NULL, 0, fmt, l);
+    va_copy(nl, l);
+    len = lk_vsnprintf(NULL, 0, fmt, nl);
+    va_end(nl);
     if (len <= 0) return NULL;
     data = lk_newdata(S, len+1);
     lk_vsnprintf((char*)data, len+1, fmt, l);
@@ -2015,15 +2031,16 @@ LK_API int lk_cpucount (void) {
 }
 
 LK_API void lk_waitclose (lk_State *S) {
-    if (S == NULL) return;
+    if (S != NULL) {
 #ifdef _WIN32
-    WaitForMultipleObjects(S->nthreads, S->threads, TRUE, INFINITE);
+        WaitForMultipleObjects(S->nthreads, S->threads, TRUE, INFINITE);
 #else
-    size_t i;
-    for (i = 0; i < S->nthreads; ++i)
-        pthread_join(S->threads[i], NULL);
-    S->nthreads = 0; /* not in win32: we should call CloseHandle() on win32 */
+        size_t i;
+        for (i = 0; i < S->nthreads; ++i)
+            pthread_join(S->threads[i], NULL);
+        S->nthreads = 0; /* not in win32: we should call CloseHandle() on win32 */
 #endif
+    }
 }
 
 LK_API char *lk_getconfig (lk_State *S, const char *key) {

@@ -377,8 +377,8 @@ static void lkX_screendump(lk_LogState *ls, const char *s, size_t len, int color
     (void)ls;
     if (color & 0x08) fg += 60;
     if (color & 0x80) bg += 60;
-    fprintf(stdout, "\e[%d;%dm%.*s\e[0m\n", fg, bg, (int)len, s);
-	fflush(stdout);
+    fprintf(stdout, "\x1B[%d;%dm%.*s\x1B[0m\n", fg, bg, (int)len, s);
+    fflush(stdout);
 #endif
 }
 
