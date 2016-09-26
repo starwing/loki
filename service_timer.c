@@ -132,8 +132,7 @@ static void lkX_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
 
 static void lkX_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) {
     unsigned index;
-    if (timer->index != LK_TIMER_NOINDEX)
-        lkX_canceltimer(ts, timer);
+    lkX_canceltimer(ts, timer);
     if (ts->heap_size <= ts->heap_used)
         lkX_resizeheap(ts, ts->heap_size * 2);
     index = ts->heap_used++;
@@ -158,14 +157,13 @@ static void lkX_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) 
 
 LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
     lk_TimerState *ts = lkX_getstate(svr);
-    lk_State *S = lk_state((lk_Slot*)svr);
     lk_Timer *timer;
     lk_lock(ts->lock);
     timer = (lk_Timer*)lk_poolalloc(ts->S, &ts->timers);
     timer->u.ud = ud;
     timer->handler = cb;
     timer->ts = ts;
-    timer->service = lk_self(S);
+    timer->service = NULL;
     timer->index = LK_TIMER_NOINDEX;
     lk_unlock(ts->lock);
     return timer;
@@ -174,6 +172,10 @@ LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
 LK_API void lk_deltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
+    if (timer->service) {
+        lk_release(timer->service);
+        timer->service = NULL;
+    }
     lkX_canceltimer(ts, timer);
     lk_poolfree(&ts->timers, timer);
     lk_unlock(ts->lock);
@@ -181,7 +183,13 @@ LK_API void lk_deltimer(lk_Timer *timer) {
 
 LK_API void lk_starttimer(lk_Timer *timer, lk_Time delayms) {
     lk_TimerState *ts = timer->ts;
+    lk_Service *self = lk_self(ts->S);
     lk_lock(ts->lock);
+    if (timer->service != self) {
+        lk_release(timer->service);
+        lk_retain(self);
+        timer->service = self;
+    }
     lkX_starttimer(ts, timer, delayms);
     lk_unlock(ts->lock);
 }
@@ -189,6 +197,10 @@ LK_API void lk_starttimer(lk_Timer *timer, lk_Time delayms) {
 LK_API void lk_canceltimer(lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
+    if (timer->service) {
+        lk_release(timer->service);
+        timer->service = NULL;
+    }
     lkX_canceltimer(ts, timer);
     lk_unlock(ts->lock);
 }
@@ -241,17 +253,13 @@ static int lkX_poller (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
 }
 
 static int lkX_refactor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
-    lk_TimerState *ts = lkX_getstate(sender);
     lk_Timer *timer = (lk_Timer*)sig->data;
+    (void)sender;
     if (timer->handler) {
         int ret = timer->handler(S, timer->u.ud, timer,
                 timer->emittime - timer->starttime);
         if (ret > 0) lk_starttimer(timer, ret);
-        else {
-            lk_lock(ts->lock);
-            lk_poolfree(&ts->timers, timer);
-            lk_unlock(ts->lock);
-        }
+        else lk_deltimer(timer);
     }
     return LK_OK;
 }

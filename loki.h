@@ -50,6 +50,14 @@
 #define LK_TYPE_MASK     ((unsigned)0x3FFFFFFF)
 #define LK_RESPONSE_TYPE ((unsigned)0x80000000)
 
+#ifndef LK_SLOTNAME_LAUNCH
+# define LK_SLOTNAME_LAUNCH "on_service_launch"
+#endif
+
+#ifndef LK_SLOTNAME_CLOSE
+# define LK_SLOTNAME_CLOSE "on_service_close"
+#endif
+
 LK_NS_BEGIN
 
 
@@ -83,6 +91,7 @@ struct lk_Signal {
 /* global routines */
 
 LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud);
+LK_API void      lk_close    (lk_State *S);
 
 LK_API void lk_waitclose (lk_State *S);
 
@@ -102,7 +111,9 @@ LK_API int lk_vlog (lk_State *S, const char *fmt, va_list l);
 /* service routines */
 
 LK_API lk_Service *lk_launch (lk_State *S, const char *name, lk_Handler *h, void *ud);
-LK_API void        lk_close  (lk_State *S);
+
+LK_API int lk_retain  (lk_Service *svr);
+LK_API int lk_release (lk_Service *svr);
 
 LK_API int lk_broadcast (lk_State *S, const char *slot, const lk_Signal *sig);
 
@@ -457,11 +468,11 @@ struct lk_Slot {
     unsigned       is_poll      : 1;
     unsigned       is_svr       : 1;
     unsigned       weak         : 1;
-    unsigned       dead         : 1;
-    unsigned       active       : 1;
-    unsigned       broadcast    : 1;
+    unsigned       dead         : 1; /* can not receive messages */
+    unsigned       active       : 1; /* can not enqueue to main_queue */
     unsigned       haslisteners : 1;
     unsigned       dellisteners : 1;
+    unsigned       broadcast    : 1;
     lk_State      *S;
     lk_Service    *service;
     void          *data;
@@ -493,10 +504,8 @@ struct lk_Service {
 
 struct lk_State {
     lk_Service     root;
-    unsigned       nservices : 32;
-    unsigned       nthreads  : 31;
-    unsigned       start     : 1;
-    unsigned       dead      : 1;
+    int            nservices;
+    int            nthreads;
     lk_Table       slot_names;
     lk_Slot       *logger;
     lk_Lock        lock;
@@ -1092,17 +1101,16 @@ static lk_Slot *lkP_new (lk_State *S, lk_MemPool *pool, lk_Service *svr, const c
 
 static lk_Slot *lkP_register (lk_State *S, lk_Slot *slot) {
     lk_Entry *e = lk_settable(S, &S->slot_names, slot->name);
-    if (S->dead || (lk_Slot*)e->key != slot) {
-        if (&slot->service->slot == slot)
-            lk_freelock(slot->service->lock);
-        lk_lock(S->pool_lock);
-        if (slot->is_svr)       lk_poolfree(&S->services, slot);
-        else if (slot->is_poll) lk_poolfree(&S->polls, slot);
-        else                    lk_poolfree(&S->slots, slot);
-        lk_unlock(S->pool_lock);
-        return NULL;
-    }
-    return slot;
+    if (S->nthreads != 0 && (lk_Slot*)e->key == slot)
+        return slot;
+    if (&slot->service->slot == slot)
+        lk_freelock(slot->service->lock);
+    lk_lock(S->pool_lock);
+    if (slot->is_svr)       lk_poolfree(&S->services, slot);
+    else if (slot->is_poll) lk_poolfree(&S->polls, slot);
+    else                    lk_poolfree(&S->slots, slot);
+    lk_unlock(S->pool_lock);
+    return NULL;
 }
 
 static int lkP_delpoll (lk_State *S, lk_Poll *poll) {
@@ -1254,21 +1262,6 @@ static int lkE_srcdeletor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     return LK_OK;
 }
 
-static int lkE_checkemit (lk_State *S, lk_Slot *sender, lk_Slot *recipient) {
-    lk_Service *from = sender->service, *to = recipient->service;
-    if (S->dead)
-        return LK_ERR; /*lk_log(S, "E[emit]" lk_loc("host stopped"));*/
-    else if (lkP_isdead(from) || recipient != S->logger)
-        return LK_OK; /* lk_log(S, "E[emit]" lk_loc("source service stopped")); */
-    else if (lkP_isdead(to) && recipient != S->logger)
-        lk_log(S, "E[emit]" lk_loc("destination service stopped"));
-    else if (recipient->is_poll && lkP_isdead(recipient))
-        return LK_ERR;
-    else
-        return LK_OK;
-    return LK_ERR;
-}
-
 static void lkE_delsource (lk_State *S, lk_Source *src) {
     lk_Signal sig = LK_SIGNAL;
     unsigned refcount = 0;
@@ -1288,23 +1281,20 @@ static lk_SignalNode *lkE_newsignal (lk_State *S, lk_Slot *slot, const lk_Signal
     lk_Slot *sender = lk_current(S);
     lk_SignalNode *node;
     lk_Source *src;
-    if (sig == NULL || lkE_checkemit(S, sender, slot) != LK_OK) return NULL;
     lk_lock(S->pool_lock);
     node = (lk_SignalNode*)lk_poolalloc(S, &S->signals);
     lk_unlock(S->pool_lock);
     node->recipient = slot;
     node->sender    = sender;
     node->data      = *sig;
-    lk_lock(sender->service->lock);
-    ++sender->service->pending;
-    lk_unlock(sender->service->lock);
+    lk_retain(sender->service);
     if (node->data.source == NULL && sender->source != NULL) {
         node->data.source = sender->source;
         sender->source = NULL;
     }
     if ((src = node->data.source) != NULL) {
+        lk_retain(src->service);
         lk_lock(src->service->lock);
-        ++src->service->pending;
         ++src->refcount;
         lk_unlock(src->service->lock);
     }
@@ -1318,15 +1308,10 @@ static void lkE_delsignal (lk_State *S, lk_SignalNode *node) {
     if (node->data.isdata) lk_deldata(S, (lk_Data*)node->data.data);
     if (src != NULL && (svr = src->service) != NULL) {
         lkE_delsource(S, src);
-        lk_lock(svr->lock);
-        if (--svr->pending == 0) lkS_active(S, svr);
-        lk_unlock(svr->lock);
+        lk_release(svr);
     }
-    if ((svr = node->sender->service) != NULL) {
-        lk_lock(svr->lock);
-        if (--svr->pending == 0) lkS_active(S, svr);
-        lk_unlock(svr->lock);
-    }
+    if ((svr = node->sender->service) != NULL)
+        lk_release(svr);
     lk_lock(S->pool_lock);
     lk_poolfree(&S->signals, node);
     lk_unlock(S->pool_lock);
@@ -1336,7 +1321,7 @@ static int lkE_emitS (lk_Slot *slot, lk_SignalNode *node) {
     lk_Service *svr = slot->service;
     int ret = LK_ERR;
     lk_lock(svr->lock);
-    if (!lkP_isdead(svr)) {
+    if (svr->slot.S->nthreads != 0 && !lkP_isdead(svr)) {
         lk_Poll *poll = (lk_Poll*)slot;
         if (!slot->is_poll) {
             lkQ_enqueue(&svr->signals, node);
@@ -1394,8 +1379,7 @@ LK_API int lk_emit (lk_Slot *slot, const lk_Signal *sig) {
     assert(slot != NULL);
     if (slot == NULL || sig == NULL) return LK_ERR;
     node = lkE_newsignal(slot->S, slot, sig);
-    if (lkE_checkemit(slot->S, lk_current(slot->S), slot) != LK_OK
-            || lkE_emitS(slot, node) != LK_OK) {
+    if (lkE_emitS(slot, node) != LK_OK) {
         lkE_delsignal(slot->S, node);
         return LK_ERR;
     }
@@ -1711,11 +1695,10 @@ static void lkS_freeslotsG (lk_State *S, lk_Service *svr) {
     lk_unlock(S->pool_lock);
 }
 
-static void lkS_checkstate (lk_State *S, lk_Service *svr) {
+static void lkS_release (lk_State *S, lk_Service *svr) {
     lk_lock(S->lock);
     if (!svr->slot.weak) --S->nservices;
     if (S->nservices == 0) {
-        S->dead = 1;
         lk_lock(S->queue_lock);
         lk_signal(S->queue_event);
         lk_unlock(S->queue_lock);
@@ -1735,7 +1718,7 @@ static int lkS_delserviceG (lk_State *S, lk_Service *svr) {
     lkS_freepolls(S, svr);
     if (svr->pending != 0) return LK_ERR;
     lkS_freeslotsG(S, svr);
-    lkS_checkstate(S, svr);
+    lkS_release(S, svr);
     lk_freelock(svr->lock);
     assert(lkQ_empty(&svr->signals));
     if (svr != &S->root) {
@@ -1826,7 +1809,7 @@ static int lkS_check (lk_State *S, const char *name, lk_Handler *h) {
         lk_log(S, "E[launch]" lk_loc("serivce name '%s' too long"), name);
         return LK_ERR;
     }
-    return S->dead ? LK_ERR : LK_OK;
+    return S->nthreads == 0 ? LK_ERR : LK_OK;
 }
 
 static int lkS_callinit (lk_State *S, lk_Service *svr) {
@@ -1861,7 +1844,7 @@ static lk_Service *lkS_callinitGS (lk_State *S, lk_Service *svr, lk_Handler *h, 
     if (h && lkS_callinit(S, svr) != LK_OK)
         return NULL;
     sig.data = svr;
-    lk_broadcast(S, "launch", &sig);
+    lk_broadcast(S, LK_SLOTNAME_LAUNCH, &sig);
     lk_lock(svr->lock);
     svr->slot.active = 0;
     if (!lkQ_empty(&svr->signals))
@@ -1887,6 +1870,25 @@ LK_API lk_Service *lk_launch (lk_State *S, const char *name, lk_Handler *h, void
     return lkS_callinitGS(S, svr, h, data);
 }
 
+LK_API int lk_retain (lk_Service *svr) {
+    int pending;
+    if (svr == NULL) return 0;
+    lk_lock(svr->lock);
+    pending = (int)++svr->pending;
+    lk_unlock(svr->lock);
+    return pending;
+}
+
+LK_API int lk_release (lk_Service *svr) {
+    int pending = 0;
+    if (svr == NULL) return 0;
+    lk_lock(svr->lock);
+    if (svr->pending > 0) pending = (int)--svr->pending;
+    if (pending == 0 && lkP_isdead(svr)) lkS_active(svr->slot.S, svr);
+    lk_unlock(svr->lock);
+    return pending;
+}
+
 
 /* global routines */
 
@@ -1894,9 +1896,9 @@ static void lkG_worker(void *ud) {
     lk_State *S = (lk_State*)ud;
     lk_Service *svr;
     lk_lock(S->queue_lock);
-    while (!S->dead) {
+    while (S->nservices != 0) {
         lkQ_dequeue(&S->main_queue, svr);
-        while (svr == NULL && !S->dead) {
+        while (svr == NULL && S->nservices != 0) {
             lk_waitevent(&S->queue_event, &S->queue_lock, -1);
             lkQ_dequeue(&S->main_queue, svr);
         }
@@ -1924,7 +1926,6 @@ static void lkG_clearservices (lk_State *S) {
         if (slot->is_svr) {
             int ret;
             assert(slot->weak);
-            slot->dead = 1;
             ret = lkS_delserviceG(S, (lk_Service*)slot);
             assert(ret == LK_OK);
         }
@@ -1941,6 +1942,7 @@ static int lkG_initstate (lk_State *S, const char *name) {
         return LK_ERR;
     lk_strcpy(S->root.slot.name, name, LK_MAX_NAMESIZE);
     S->root.slot.S = S;
+    S->nthreads = -1; /* no thread and no start */
     lkQ_init(&S->main_queue);
     lk_initpool(&S->services, sizeof(lk_Service));
     lk_initpool(&S->slots, sizeof(lk_Slot));
@@ -1957,10 +1959,7 @@ static int lkG_initstate (lk_State *S, const char *name) {
 }
 
 static void lkG_delstate (lk_State *S) {
-    size_t i;
     lkG_clearservices(S);
-    for (i = 0; i < S->nthreads; ++i)
-        lk_freethread(S->threads[i]);
     lk_freepool(S, &S->services);
     lk_freepool(S, &S->slots);
     lk_freepool(S, &S->polls);
@@ -2002,7 +2001,7 @@ static void lkG_setconfig(lk_State *S, const char *key, const char *value) {
 LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud) {
     enum { TLS, EVT, LCK, QLK, CLK, PLK, TOTAL };
     lk_Allocf *alloc = allocf ? allocf : default_allocf;
-    lk_State *S = (lk_State*)allocf(ud, NULL, sizeof(lk_State), 0);
+    lk_State *S = (lk_State*)alloc(ud, NULL, sizeof(lk_State), 0);
     unsigned ok = 0;
     if (S == NULL) return NULL;
     memset(S, 0, sizeof(*S));
@@ -2026,30 +2025,28 @@ LK_API lk_State *lk_newstate (const char *name, lk_Allocf *allocf, void *ud) {
 
 LK_API void lk_close (lk_State *S) {
     lk_Context *ctx = lk_context(S);
-    lk_Service *svr = ctx ? ctx->current->service : NULL;
-    if (S == NULL) return;
-    if (ctx == NULL && S->dead)
+    lk_Service *svr = ctx && ctx->current ? ctx->current->service : NULL;
+    if (ctx == NULL && S && S->nservices == 0)
         lkG_delstate(S);
     else if (svr != NULL && !lkP_isdead(svr)) {
         lk_Signal sig = LK_RESPONSE;
         sig.data = svr;
-        lk_broadcast(S, "close", &sig);
+        lk_broadcast(S, LK_SLOTNAME_CLOSE, &sig);
         lk_lock(S->lock);
         if (&svr->slot == S->logger)
             S->logger = NULL;
+        lk_unlock(S->lock);
         lk_lock(svr->lock);
         lkP_isdead(svr) = 1;
         lkS_active(S, svr);
         lk_unlock(svr->lock);
-        lk_unlock(S->lock);
     }
 }
 
 LK_API int lk_start (lk_State *S, int threads) {
     int i, count = 0;
     if (S == NULL) return 0;
-    if (S->start) return S->nthreads;
-    S->start = 1;
+    if (S->nthreads > 0) return S->nthreads;
     lkS_callinitGS(S, &S->root, S->root.slot.handler, S->root.slot.data);
     if (S->root.slot.handler == NULL)
         ++S->nservices;
@@ -2058,7 +2055,7 @@ LK_API int lk_start (lk_State *S, int threads) {
         if (!lk_initthread(&S->threads[i], lkG_worker, S))
             break;
     }
-    S->nthreads = (unsigned)i;
+    S->nthreads = i;
     lk_unlock(S->lock);
     return i;
 }
@@ -2075,14 +2072,16 @@ LK_API int lk_cpucount (void) {
 
 LK_API void lk_waitclose (lk_State *S) {
     if (S != NULL) {
+        int i;
 #ifdef _WIN32
         WaitForMultipleObjects(S->nthreads, S->threads, TRUE, INFINITE);
+        for (i = 0; i < S->nthreads; ++i)
+            lk_freethread(S->threads[i]);
 #else
-        size_t i;
         for (i = 0; i < S->nthreads; ++i)
             pthread_join(S->threads[i], NULL);
-        S->nthreads = 0; /* not in win32: we should call CloseHandle() on win32 */
 #endif
+        S->nthreads = 0; /* not in win32: we should call CloseHandle() on win32 */
     }
 }
 

@@ -496,8 +496,8 @@ LKMOD_API int loki_service_log(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
         ls = lkX_newstate(S);
         lk_setdata(lk_current(S), ls);
         lk_newslot(S, "update", lkX_update, ls);
-        lk_newslot(S, "launch", lkX_launch, ls);
-        lk_newslot(S, "close", lkX_close, ls);
+        lk_newslot(S, LK_SLOTNAME_LAUNCH, lkX_launch, ls);
+        lk_newslot(S, LK_SLOTNAME_CLOSE,  lkX_close, ls);
         return LK_WEAK;
     }
     else if (sig == NULL) {
