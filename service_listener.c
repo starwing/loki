@@ -10,7 +10,6 @@ typedef struct lk_SlotEntry     lk_SlotEntry;
 
 struct lk_ListenerState {
     lk_State         *S;
-    lk_Listener      *freed;
     lk_Lock           lock;
     lk_Table          svrmap;
     lk_Table          slotmap;
@@ -130,35 +129,12 @@ static int lkX_broadcast (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     (void)sender;
     lk_lock(ls->lock);
     while (lkX_next(list->listeners, &node, NULL)) {
-        if (node->source.callback == NULL) continue;
         sig->source = &node->source;
         lk_emit((lk_Slot*)node->source.service, sig);
     }
-    node = ls->freed;
-    ls->freed = NULL;
     lk_unlock(ls->lock);
-    while (node) {
-        lk_Listener *next = node->link;
-        lk_freesource(&node->source);
-        node = next;
-    }
     sig->source = src;
     return LK_OK;
-}
-
-static void lkX_cleanservice (lk_ListenerState *ls, lk_Service *svr) {
-    lk_PtrEntry *e = (lk_PtrEntry*)lkX_gettable(&ls->svrmap, svr);
-    if (e && lk_key(e) == (const char*)svr) {
-        lk_Listener *node = (lk_Listener*)e->data;
-        while (node != NULL) {
-            lk_Listener *next = node->link;
-            node->link = ls->freed;
-            ls->freed = node;
-            node = next;
-        }
-        lk_key(e) = NULL;
-        e->data = NULL;
-    }
 }
 
 static int lkX_addlistener (lk_ListenerState *ls, lk_Slot *slot, lk_Handler *h, void *ud) {
@@ -215,12 +191,15 @@ static int lkX_launch (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
 
 static int lkX_close (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     lk_ListenerState *ls = lkX_state(S);
-    lk_Listener *node;
+    lk_PtrEntry *e;
+    lk_Listener *node = NULL;
     (void)sender;
     lk_lock(ls->lock);
-    lkX_cleanservice(ls, (lk_Service*)sig->data);
-    node = ls->freed;
-    ls->freed = NULL;
+    if ((e = (lk_PtrEntry*)lkX_gettable(&ls->svrmap, sig->data)) != NULL) {
+        lk_key(e) = NULL;
+        node = (lk_Listener*)e->data;
+        e->data = NULL;
+    }
     lk_unlock(ls->lock);
     while (node) {
         lk_Listener *next = node->link;
@@ -232,10 +211,12 @@ static int lkX_close (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
 
 LK_API int lk_addlistener (lk_Service *svr, lk_Slot *slot, lk_Handler *h, void *ud) {
     lk_ListenerState *ls = lkX_svrstate(svr);
-    int ret;
-    lk_lock(ls->lock);
-    ret = lkX_addlistener(ls, slot, h, ud);
-    lk_unlock(ls->lock);
+    int ret = LK_ERR;
+    if (h != NULL) {
+        lk_lock(ls->lock);
+        ret = lkX_addlistener(ls, slot, h, ud);
+        lk_unlock(ls->lock);
+    }
     return ret;
 }
 
