@@ -30,9 +30,7 @@ struct lk_SlotEntry {
     lk_ListenerState *ls;
     lk_Slot          *target;
     lk_Listener      *listeners;
-    unsigned          broadcast;
 };
-
 
 #define lkX_svrstate(svr) ((lk_ListenerState*)lk_data((lk_Slot*)(svr)))
 #define lkX_state(S)      ((lk_ListenerState*)lk_userdata(S))
@@ -90,15 +88,6 @@ static lk_Entry *lkX_settable (lk_State *S, lk_Table *t, void *key) {
     return lk_newkey(S, t, &e);
 }
 
-static lk_Listener *lkX_merge (lk_Listener *oldh, lk_Listener *newh) {
-    lk_Listener *last = newh->prev;
-    oldh->prev->next = last->next;
-    last->next->prev = oldh->prev;
-    oldh->prev = last;
-    last->prev = oldh;
-    return oldh;
-}
-
 static int lkX_next (lk_Listener *h, lk_Listener **pnode, lk_Listener **pnext) {
     if (h == NULL) return 0;
     if (*pnode != NULL) {
@@ -122,56 +111,29 @@ static int lkX_srcdeletor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     lk_ListenerState *ls = list->ls;
     (void)S, (void)sender;
     lk_lock(ls->lock);
-    if (list->broadcast) {
-        node->source.callback = NULL;
-        node->link = ls->freed;
-        ls->freed = node->link;
-    }
-    else {
-        lkX_unlink(&list->listeners, node);
-        lk_poolfree(&list->ls->listeners, node);
-        if (list->listeners == NULL) {
-            lk_Entry *e = lkX_gettable(&ls->slotmap, list->target);
-            e->key = NULL;
-            lk_sethook(list->target, NULL, NULL);
-        }
+    lkX_unlink(&list->listeners, node);
+    lk_poolfree(&list->ls->listeners, node);
+    if (list->listeners == NULL) {
+        lk_Entry *e = lkX_gettable(&ls->slotmap, list->target);
+        e->key = NULL;
+        lk_sethook(list->target, NULL, NULL);
     }
     lk_unlock(ls->lock);
     return LK_OK;
-}
-
-static lk_Listener *lkX_newlistener (lk_ListenerState *ls, lk_Handler *h, void *ud) {
-    lk_Listener *node;
-    lk_lock(ls->lock);
-    node = (lk_Listener*)lk_poolalloc(ls->S, &ls->listeners);
-    lk_unlock(ls->lock);
-    lk_initsource(ls->S, &node->source, h, ud);
-    node->source.deletor = lkX_srcdeletor;
-    node->source.refcount = 1;
-    node->source.force = 1;
-    return node;
 }
 
 static int lkX_broadcast (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     lk_Source *src = sig->source;
     lk_SlotEntry *list = (lk_SlotEntry*)lk_userdata(S);
     lk_ListenerState *ls = list->ls;
-    lk_Listener *h, *node = NULL;
+    lk_Listener *node = NULL;
     (void)sender;
     lk_lock(ls->lock);
-    h = list->listeners;
-    list->listeners = NULL;
-    list->broadcast = 1;
-    lk_unlock(ls->lock);
-    while (lkX_next(h, &node, NULL)) {
-        if (node->source.callback != NULL) {
-            sig->source = &node->source;
-            lk_emit((lk_Slot*)node->source.service, sig);
-        }
+    while (lkX_next(list->listeners, &node, NULL)) {
+        if (node->source.callback == NULL) continue;
+        sig->source = &node->source;
+        lk_emit((lk_Slot*)node->source.service, sig);
     }
-    lk_lock(ls->lock);
-    list->broadcast = 0;
-    list->listeners = list->listeners ? lkX_merge(h, list->listeners) : h;
     node = ls->freed;
     ls->freed = NULL;
     lk_unlock(ls->lock);
@@ -182,6 +144,21 @@ static int lkX_broadcast (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     }
     sig->source = src;
     return LK_OK;
+}
+
+static void lkX_cleanservice (lk_ListenerState *ls, lk_Service *svr) {
+    lk_PtrEntry *e = (lk_PtrEntry*)lkX_gettable(&ls->svrmap, svr);
+    if (e && lk_key(e) == (const char*)svr) {
+        lk_Listener *node = (lk_Listener*)e->data;
+        while (node != NULL) {
+            lk_Listener *next = node->link;
+            node->link = ls->freed;
+            ls->freed = node;
+            node = next;
+        }
+        lk_key(e) = NULL;
+        e->data = NULL;
+    }
 }
 
 static int lkX_addlistener (lk_ListenerState *ls, lk_Slot *slot, lk_Handler *h, void *ud) {
@@ -196,7 +173,11 @@ static int lkX_addlistener (lk_ListenerState *ls, lk_Slot *slot, lk_Handler *h, 
         list->target = slot;
         lk_sethook(slot, lkX_broadcast, list);
     }
-    node = lkX_newlistener(ls, h, ud);
+    node = (lk_Listener*)lk_poolalloc(ls->S, &ls->listeners);
+    lk_initsource(ls->S, &node->source, h, ud);
+    node->source.deletor = lkX_srcdeletor;
+    node->source.refcount = 1;
+    node->source.force = 1;
     node->entry = list;
     node->link = (lk_Listener*)e->data;
     e->data = node;
@@ -215,6 +196,38 @@ static lk_Listener *lkX_dellistener (lk_ListenerState *ls, lk_Slot *slot, lk_Han
         *pp = (*pp)->link;
     }
     return node;
+}
+
+static int lkX_launch (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_ListenerState *ls = (lk_ListenerState*)lk_userdata(S);
+    lk_Service *svr = (lk_Service*)sig->data;
+    lk_PtrEntry *e;
+    (void)sender;
+    lk_lock(ls->lock);
+    e = (lk_PtrEntry*)lkX_settable(S, &ls->svrmap, svr);
+    if (lk_key(e) == NULL) {
+        lk_key(e) = (const char*)svr;
+        e->data = NULL;
+    }
+    lk_unlock(ls->lock);
+    return LK_OK;
+}
+
+static int lkX_close (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_ListenerState *ls = lkX_state(S);
+    lk_Listener *node;
+    (void)sender;
+    lk_lock(ls->lock);
+    lkX_cleanservice(ls, (lk_Service*)sig->data);
+    node = ls->freed;
+    ls->freed = NULL;
+    lk_unlock(ls->lock);
+    while (node) {
+        lk_Listener *next = node->link;
+        lk_freesource(&node->source);
+        node = next;
+    }
+    return LK_OK;
 }
 
 LK_API int lk_addlistener (lk_Service *svr, lk_Slot *slot, lk_Handler *h, void *ud) {
@@ -239,51 +252,6 @@ LK_API int lk_dellistener (lk_Service *svr, lk_Slot *slot, lk_Handler *h, void *
     return LK_ERR;
 }
 
-static int lkX_launch (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
-    lk_ListenerState *ls = (lk_ListenerState*)lk_userdata(S);
-    lk_Service *svr = (lk_Service*)sig->data;
-    lk_PtrEntry *e;
-    (void)sender;
-    lk_lock(ls->lock);
-    e = (lk_PtrEntry*)lkX_settable(S, &ls->svrmap, svr);
-    if (lk_key(e) == NULL) {
-        lk_key(e) = (const char*)svr;
-        e->data = NULL;
-    }
-    lk_unlock(ls->lock);
-    return LK_OK;
-}
-
-static int lkX_close (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
-    lk_ListenerState *ls = lkX_state(S);
-    lk_Service *svr = (lk_Service*)sig->data;
-    lk_PtrEntry *e;
-    lk_Listener *node;
-    (void)sender;
-    lk_lock(ls->lock);
-    e = (lk_PtrEntry*)lkX_gettable(&ls->svrmap, svr);
-    if (e && lk_key(e) == (const char*)svr) {
-        node = (lk_Listener*)e->data;
-        while (node != NULL) {
-            lk_Listener *next = node->link;
-            node->link = ls->freed;
-            ls->freed = node;
-            node = next;
-        }
-        lk_key(e) = NULL;
-        e->data = NULL;
-    }
-    node = ls->freed;
-    ls->freed = NULL;
-    lk_unlock(ls->lock);
-    while (node) {
-        lk_Listener *next = node->link;
-        lk_freesource(&node->source);
-        node = next;
-    }
-    return LK_OK;
-}
-
 LKMOD_API int loki_service_listener (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     if (sender == NULL) { /* init */
         lk_ListenerState *ls = (lk_ListenerState*)
@@ -302,10 +270,10 @@ LKMOD_API int loki_service_listener (lk_State *S, lk_Slot *sender, lk_Signal *si
     }
     else if (sig == NULL) { /* free */
         lk_ListenerState *ls = lkX_state(S);
-        lk_freelock(ls->lock);
-        lk_freepool(S, &ls->listeners);
         lk_freetable(S, &ls->svrmap);
         lk_freetable(S, &ls->slotmap);
+        lk_freepool(S, &ls->listeners);
+        lk_freelock(ls->lock);
         lk_free(S, ls, sizeof(*ls));
     }
     return LK_OK;
