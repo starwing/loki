@@ -6,7 +6,7 @@
 #include "znet/zn_buffer.h"
 
 
-#define lkX_getstate(S) ((lk_ZNetState*)lk_data((lk_Slot*)lk_self(S)))
+#define lkX_state(S) ((lk_ZNetState*)lk_userdata(S))
 
 #define lkX_getpooled(var,type) type *var;  do { \
     lk_lock(zs->lock);                           \
@@ -160,7 +160,7 @@ err_lock:
     return NULL;
 }
 
-static lk_RecvHandlers *lkX_gethandlers(lk_ZNetState *zs, lk_Service *svr) {
+static lk_RecvHandlers *lkX_gethandlers (lk_ZNetState *zs, lk_Service *svr) {
     lk_HandlersEntry *e;
     lk_RecvHandlers *hs = NULL;
     lk_lock(zs->lock);
@@ -176,7 +176,7 @@ static void lkX_copyinfo (lk_PostCmd *cmd, const char *addr, unsigned port) {
 }
 
 static int lkX_poller (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
-    lk_ZNetState *zs = lkX_getstate(S);
+    lk_ZNetState *zs = lkX_state(S);
     (void)sender, (void)sig;
     while (!zs->closing)
         zn_run(zs->zs, ZN_RUN_LOOP);
@@ -209,7 +209,7 @@ static void lkX_postdeletor (void *ud, zn_State *S) {
 static zn_RecvHandler     lkX_onrecv;
 static zn_RecvFromHandler lkX_onrecvfrom;
 
-static size_t lkX_onheader(void *ud, const char *buff, size_t size) {
+static size_t lkX_onheader (void *ud, const char *buff, size_t size) {
     lk_Tcp *tcp = (lk_Tcp*)ud;
     lk_RecvHandlers *h = tcp->handlers;
     if (h && h->on_header)
@@ -217,14 +217,14 @@ static size_t lkX_onheader(void *ud, const char *buff, size_t size) {
     return size;
 }
 
-static void lkX_onpacket(void *ud, const char *buff, size_t size) {
+static void lkX_onpacket (void *ud, const char *buff, size_t size) {
     lk_Tcp *tcp = (lk_Tcp*)ud;
     lk_RecvHandlers *h = tcp->handlers;
     if (h && h->on_packet)
         h->on_packet(tcp->zs->S, h->ud_header, tcp, buff, size);
 }
 
-static lk_Tcp *lkX_preparetcp(lk_ZNetState *zs, lk_Service *svr, zn_Tcp *ztcp) {
+static lk_Tcp *lkX_preparetcp (lk_ZNetState *zs, lk_Service *svr, zn_Tcp *ztcp) {
     int ret;
     lkX_getcached(tcp, lk_Tcp);
     tcp->service = svr;
@@ -248,7 +248,7 @@ static lk_Tcp *lkX_preparetcp(lk_ZNetState *zs, lk_Service *svr, zn_Tcp *ztcp) {
     return tcp;
 }
 
-static lk_Udp *lkX_prepareudp(lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
+static lk_Udp *lkX_prepareudp (lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
     int ret;
     lkX_getcached(udp, lk_Udp);
     udp->service = svr;
@@ -267,7 +267,7 @@ static lk_Udp *lkX_prepareudp(lk_ZNetState *zs, lk_Service *svr, zn_Udp *zudp) {
     return udp;
 }
 
-static void lkX_deltcp(lk_Tcp *tcp) {
+static void lkX_deltcp (lk_Tcp *tcp) {
     lk_Signal sig = LK_RESPONSE;
     if (tcp->tcp) {
         zn_deltcp(tcp->tcp);
@@ -281,7 +281,7 @@ static void lkX_deltcp(lk_Tcp *tcp) {
     lk_emit((lk_Slot*)tcp->service, &sig);
 }
 
-static void lkX_accepterror(lk_Accept *accept, unsigned err) {
+static void lkX_accepterror (lk_Accept *accept, unsigned err) {
     lk_Signal sig = LK_RESPONSE;
     sig.type = LK_SIGTYPE_ACCEPT_LISTEN;
     sig.data = accept;
@@ -673,7 +673,7 @@ LK_API void lk_connect (lk_Service *svr, const char *addr, unsigned port, lk_Con
     lkX_post(cmd);
 }
 
-LK_API void *lk_gettcpdata(lk_Tcp *tcp) {
+LK_API void *lk_gettcpdata (lk_Tcp *tcp) {
     lk_ZNetState *zs = tcp->zs;
     void *data;
     lk_lock(zs->lock);
@@ -682,7 +682,7 @@ LK_API void *lk_gettcpdata(lk_Tcp *tcp) {
     return data;
 }
 
-LK_API void lk_settcpdata(lk_Tcp *tcp, void *data) {
+LK_API void lk_settcpdata (lk_Tcp *tcp, void *data) {
     lk_ZNetState *zs = tcp->zs;
     lk_lock(zs->lock);
     tcp->data = data;
@@ -743,18 +743,17 @@ LK_API void lk_sendto (lk_Udp *udp, const char *buff, unsigned size, const char 
 /* entry point */
 
 LKMOD_API int loki_service_socket (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+    lk_ZNetState *zs = lkX_state(S);
     if (sender == NULL) {
-        lk_ZNetState *zs = lkX_newstate(S);
+        zs = lkX_newstate(S);
         lk_Service *svr = lk_self(S);
         zs->poll = lk_newpoll(S, "poll", lkX_poller, zs);
         lk_setrefactor((lk_Slot*)svr, lkX_refactor);
         lk_setdata((lk_Slot*)svr, zs);
         return LK_WEAK;
     }
-    else if (sig == NULL) {
-        lk_ZNetState *zs = lkX_getstate(S);
+    else if (sig == NULL)
         zn_post(zs->zs, lkX_postdeletor, zs);
-    }
     return LK_OK;
 }
 

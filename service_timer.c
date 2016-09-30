@@ -57,8 +57,6 @@ LK_API lk_Time lk_time(void) {
 
 /* implements */
 
-#define lkX_getstate(svr)  ((lk_TimerState*)lk_data((lk_Slot*)(svr)))
-
 #define LK_TIMER_NOINDEX (~(unsigned)0)
 #define LK_FOREVER       (~(lk_Time)0)
 #ifndef LK_MAX_SIZET
@@ -90,7 +88,7 @@ struct lk_TimerState {
     unsigned heap_size;
 };
 
-static int lkX_resizeheap(lk_TimerState *ts, size_t size) {
+static int lkX_resizeheap (lk_TimerState *ts, size_t size) {
     lk_Timer **heap;
     size_t realsize = LK_MIN_TIMEHEAP;
     while (realsize < size && realsize < LK_MAX_SIZET/sizeof(lk_Timer*)/2)
@@ -103,7 +101,7 @@ static int lkX_resizeheap(lk_TimerState *ts, size_t size) {
     return 1;
 }
 
-static void lkX_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
+static void lkX_canceltimer (lk_TimerState *ts, lk_Timer *timer) {
     unsigned index = timer->index;
     if (index == LK_TIMER_NOINDEX) return;
     timer->index = LK_TIMER_NOINDEX;
@@ -130,7 +128,7 @@ static void lkX_canceltimer(lk_TimerState *ts, lk_Timer *timer) {
     timer->index = index;
 }
 
-static void lkX_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) {
+static void lkX_starttimer (lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) {
     unsigned index;
     lkX_canceltimer(ts, timer);
     if (ts->heap_size <= ts->heap_used)
@@ -155,8 +153,8 @@ static void lkX_starttimer(lk_TimerState *ts, lk_Timer *timer, lk_Time delayms) 
     }
 }
 
-LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
-    lk_TimerState *ts = lkX_getstate(svr);
+LK_API lk_Timer *lk_newtimer (lk_Service *svr, lk_TimerHandler *cb, void *ud) {
+    lk_TimerState *ts = (lk_TimerState*)lk_data((lk_Slot*)svr);
     lk_Timer *timer;
     lk_lock(ts->lock);
     timer = (lk_Timer*)lk_poolalloc(ts->S, &ts->timers);
@@ -169,7 +167,7 @@ LK_API lk_Timer *lk_newtimer(lk_Service *svr, lk_TimerHandler *cb, void *ud) {
     return timer;
 }
 
-LK_API void lk_deltimer(lk_Timer *timer) {
+LK_API void lk_deltimer (lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
     if (timer->service) {
@@ -181,7 +179,7 @@ LK_API void lk_deltimer(lk_Timer *timer) {
     lk_unlock(ts->lock);
 }
 
-LK_API void lk_starttimer(lk_Timer *timer, lk_Time delayms) {
+LK_API void lk_starttimer (lk_Timer *timer, lk_Time delayms) {
     lk_TimerState *ts = timer->ts;
     lk_Service *self = lk_self(ts->S);
     lk_lock(ts->lock);
@@ -194,7 +192,7 @@ LK_API void lk_starttimer(lk_Timer *timer, lk_Time delayms) {
     lk_unlock(ts->lock);
 }
 
-LK_API void lk_canceltimer(lk_Timer *timer) {
+LK_API void lk_canceltimer (lk_Timer *timer) {
     lk_TimerState *ts = timer->ts;
     lk_lock(ts->lock);
     if (timer->service) {
@@ -205,7 +203,7 @@ LK_API void lk_canceltimer(lk_Timer *timer) {
     lk_unlock(ts->lock);
 }
 
-static void lkX_updatetimers(lk_TimerState *ts, lk_Time current) {
+static void lkX_updatetimers (lk_TimerState *ts, lk_Time current) {
     if (ts->nexttime > current) return;
     while (ts->heap_used && ts->heap[0]->emittime <= current) {
         lk_Signal sig = LK_RESPONSE;
@@ -257,14 +255,14 @@ static int lkX_refactor (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     (void)sender;
     if (timer->handler) {
         int ret = timer->handler(S, timer->u.ud, timer,
-                timer->emittime - timer->starttime);
+                  timer->emittime - timer->starttime);
         if (ret > 0) lk_starttimer(timer, ret);
-        else lk_deltimer(timer);
+        else         lk_deltimer(timer);
     }
     return LK_OK;
 }
 
-LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
+LKMOD_API int loki_service_timer (lk_State *S, lk_Slot *sender, lk_Signal *sig) {
     (void)sig;
     if (sender == NULL) {
         lk_TimerState *ts = lkX_newstate(S);
@@ -272,8 +270,9 @@ LKMOD_API int loki_service_timer(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
         ts->poll = lk_newpoll(S, "poll", lkX_poller, ts);
         lk_setrefactor((lk_Slot*)svr, lkX_refactor);
         lk_setdata((lk_Slot*)svr, ts);
+        return LK_WEAK;
     }
-    return LK_WEAK;
+    return LK_OK;
 }
 
 /* win32cc: flags+='-s -mdll -xc' output='loki.dll' libs+='-lws2_32'

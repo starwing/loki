@@ -51,7 +51,7 @@ struct lk_Loader {
     void         *deletor_ud;
 };
 
-static lk_Data *lkP_getmodulename(lk_State *S) {
+static lk_Data *lkP_getmodulename (lk_State *S) {
 #ifdef _WIN32
     char buff[MAX_PATH];
     DWORD size;
@@ -73,7 +73,7 @@ static lk_Data *lkP_getmodulename(lk_State *S) {
     }
 }
 
-static int lkP_readable(const char *path) {
+static int lkP_readable (const char *path) {
 #ifdef _WIN32
     HANDLE hFile = INVALID_HANDLE_VALUE;
     int bytes = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
@@ -207,7 +207,7 @@ static void lkX_sweephandlers (lk_LoaderState *ls) {
     }
 }
 
-static lk_Service *lkX_loadservice(lk_Loader *loader) {
+static lk_Service *lkX_loadservice (lk_Loader *loader) {
     lk_State *S = loader->S;
     lk_Service *svr = NULL;
     if (loader->handler == NULL)
@@ -225,10 +225,10 @@ static lk_Service *lkX_loadservice(lk_Loader *loader) {
 
 /* interface */
 
-#define lkX_getstate(svr) ((lk_LoaderState*)lk_data((lk_Slot*)svr))
+#define lkX_state(svr) ((lk_LoaderState*)lk_data((lk_Slot*)svr))
 
 LK_API void lk_preload (lk_Service *svr, const char *name, lk_Handler *h) {
-    lk_LoaderState *ls = lkX_getstate(svr);
+    lk_LoaderState *ls = lkX_state(svr);
     lk_HandlerEntry *e;
     lk_lock(ls->lock);
     e = (lk_HandlerEntry*)lk_settable(ls->S, &ls->preloads, name);
@@ -240,7 +240,7 @@ LK_API void lk_preload (lk_Service *svr, const char *name, lk_Handler *h) {
 }
 
 LK_API void lk_addloader (lk_Service *svr, lk_LoaderHandler *h, void *ud) {
-    lk_LoaderState *ls = lkX_getstate(svr);
+    lk_LoaderState *ls = lkX_state(svr);
     lk_LoaderNode *node;
     lk_lock(ls->lock);
     node = (lk_LoaderNode*)lk_poolalloc(ls->S, &ls->loader_pool);
@@ -251,7 +251,7 @@ LK_API void lk_addloader (lk_Service *svr, lk_LoaderHandler *h, void *ud) {
 }
 
 LK_API void lk_delloader (lk_Service *svr, lk_LoaderHandler *h, void *ud) {
-    lk_LoaderState *ls = lkX_getstate(svr);
+    lk_LoaderState *ls = lkX_state(svr);
     lk_LoaderNode **pnode;
     lk_lock(ls->lock);
     pnode = &ls->loader_list.first;
@@ -272,7 +272,7 @@ LK_API void lk_delloader (lk_Service *svr, lk_LoaderHandler *h, void *ud) {
 }
 
 LK_API lk_Service *lk_require (lk_Service *svr, const char *name) {
-    lk_LoaderState *ls = lkX_getstate(svr);
+    lk_LoaderState *ls = lkX_state(svr);
     lk_LoaderList list;
     lk_Service *loaded;
     lk_Loader loader;
@@ -299,8 +299,9 @@ LK_API lk_Service *lk_require (lk_Service *svr, const char *name) {
 }
 
 LKMOD_API int loki_service_loader (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
+    lk_LoaderState *ls = (lk_LoaderState*)lk_userdata(S);
     if (slot == NULL) { /* init */
-        lk_LoaderState *ls = (lk_LoaderState*)lk_malloc(S, sizeof(lk_LoaderState));
+        ls = (lk_LoaderState*)lk_malloc(S, sizeof(lk_LoaderState));
         memset(ls, 0, sizeof(*ls));
         ls->S = S;
         (void)lk_initlock(&ls->lock);
@@ -311,7 +312,6 @@ LKMOD_API int loki_service_loader (lk_State *S, lk_Slot *slot, lk_Signal *sig) {
         lk_setdata(lk_current(S), ls);
     }
     else if (sig == NULL) { /* free */
-        lk_LoaderState *ls = lkX_getstate((lk_Service*)slot);
         lk_free(S, ls, sizeof(*ls));
         lk_freelock(ls->lock);
         lk_freetable(S, &ls->preloads);

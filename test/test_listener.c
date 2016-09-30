@@ -24,13 +24,14 @@ static int on_echo_listener(lk_State *S, lk_Slot *sender, lk_Signal *sig) {
 int main(void) {
     lk_State *S = lk_newstate(NULL, NULL, NULL);
     lk_Slot *echo = lk_newslot(S, "echo", on_echo, NULL);
+    lk_Service *listener = lk_launch(S, "listener", loki_service_listener, NULL);
     lk_launch(S, "log", loki_service_log, NULL);
     lk_setcallback(S, on_echo_return, NULL);
-    lk_addlistener(S, echo, on_echo_listener, (void*)(ptrdiff_t)1);
-    lk_addlistener(S, echo, on_echo_listener, (void*)(ptrdiff_t)2);
-    lk_addlistener(S, echo, on_echo_listener, (void*)(ptrdiff_t)3);
-    lk_addlistener(S, echo, on_echo_listener, (void*)(ptrdiff_t)4);
-    lk_addlistener(S, echo, on_echo_listener, (void*)(ptrdiff_t)5);
+    lk_addlistener(listener, echo, on_echo_listener, (void*)(ptrdiff_t)1);
+    lk_addlistener(listener, echo, on_echo_listener, (void*)(ptrdiff_t)2);
+    lk_addlistener(listener, echo, on_echo_listener, (void*)(ptrdiff_t)3);
+    lk_addlistener(listener, echo, on_echo_listener, (void*)(ptrdiff_t)4);
+    lk_addlistener(listener, echo, on_echo_listener, (void*)(ptrdiff_t)5);
     lk_emitstring(echo, 0, "Hello slot!");
     lk_start(S, 0);
     lk_waitclose(S);
@@ -38,7 +39,7 @@ int main(void) {
     return 0;
 }
 
-/* cc: flags+='-Wextra -ggdb -O0' input+='service_log.c'
+/* cc: flags+='-Wextra -ggdb -O0' input+='service_log.c service_listener.c'
  * unixcc: libs+='-pthread -ldl'
  * win32cc: libs+='-lws2_32' */
 

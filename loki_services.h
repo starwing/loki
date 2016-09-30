@@ -10,10 +10,17 @@ LK_NS_BEGIN
 
 /* services */
 
+LKMOD_API lk_Handler loki_service_listener;
 LKMOD_API lk_Handler loki_service_loader;
 LKMOD_API lk_Handler loki_service_log;
 LKMOD_API lk_Handler loki_service_socket;
 LKMOD_API lk_Handler loki_service_timer;
+
+
+/* listener interface */
+
+LK_API int lk_addlistener (lk_Service *svr, lk_Slot *slot, lk_Handler *h, void *ud);
+LK_API int lk_dellistener (lk_Service *svr, lk_Slot *slot, lk_Handler *h, void *ud);
 
 
 /* loader interface */
